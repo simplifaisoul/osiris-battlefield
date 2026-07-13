@@ -46,15 +46,25 @@ Each warrior is sized by **the share of circulating supply that trade moved** �
 
 Paste your wallet and your warriors **glow gold**, get name-tagged with live HP bars, and a panel tracks your **units on field · highest rank · enemies slain** in real time. Hit **Follow Cam** and the camera locks onto your champion in the thick of battle.
 
+## 🏆 Rounds, victory & the Duat
+
+<img src="docs/victory.png" alt="Victory sequence" width="900" />
+
+When one army pushes the front line to the enemy pyramid, the war is won: the screen flashes, the losing capital **collapses in fire**, a **VICTORY banner** proclaims the conqueror, and the running **win tally** ticks up. After a beat, the sands reset and a new round begins — endlessly, live.
+
+The dead don't just vanish — their **souls rise into the Duat** as glowing wisps. Titans and Gods descend under **divine aura pillars** with rotating rings, and a God's arrival triggers a **slow-motion, screen-flashing cinematic**.
+
 ## Features
 
-- **Real-time 3D** — three.js with instanced armies (up to ~900/side), dynamic shadows, ACES tone mapping, and an UnrealBloom pass for that molten-gold glow.
-- **Live tug-of-war front line** driven by real buy/sell power.
-- **War Meter** — live buy vs sell pressure + front-line status (PUSHING SET ▶ / STALEMATE / ◀ OSIRIS FALLING BACK).
-- **Killfeed** — real wallets deploying real trades, with ⚡ TITAN/GOD DEPLOYED call-outs.
-- **Army panels** — standing troops, casualties, 24h buy/sell counts.
-- **Clash particles**, marching animation, dying warriors sinking into the sand, threatened pyramids flaring as the enemy nears.
-- **Live price ticker** + fps, garrison seeded from real 24h buy/sell counts so the field is never empty.
+- **Real-time 3D** — three.js with instanced armies (up to ~900/side), dynamic shadows, ACES tone mapping, UnrealBloom, and a custom **cinematic pass** (vignette + film grain + chromatic aberration).
+- **Procedural audio** — fully synthesized war-drum ambience, metallic clashes tied to melee intensity, deep horns on Titan/God arrivals, and a victory fanfare + capital-collapse boom. All WebAudio, zero asset files.
+- **Round & victory system** — tug-of-war front line, capital collapse, win tally, auto-resetting rounds (framerate-independent timing).
+- **Souls, embers, divine auras** — dead warriors ascend; embers drift off the front; legends stand under rotating light-pillars.
+- **Interactive camera** — drag to orbit, scroll to zoom, auto-cinematic orbit when idle, Follow-Cam on your tracked unit.
+- **Top Commanders** — live leaderboard of the deadliest wallets on the field, by kills.
+- **War Meter** — live buy vs sell pressure + front-line status. **Killfeed** with ⚡ TITAN/GOD call-outs. **Session stats** — total slain + biggest whale. **Army panels**, live price ticker, fps.
+- **Starfield & moon**, garrison seeded from real 24h buy/sell counts so the field is never empty.
+- **Cinematic intro** — lore gate that also arms the audio on entry.
 
 ## Quick start
 
@@ -77,8 +87,10 @@ npm run dev            # → http://localhost:5175
 src/
 ├── lib/
 │   ├── battle/
-│   │   ├── engine.ts    # the 3D war: scene, instanced armies, tug-of-war
-│   │   │                #   combat, particles, tracking beacons, bloom
+│   │   ├── engine.ts    # the 3D war: scene, instanced armies, tug-of-war,
+│   │   │                #   combat, souls/embers/auras, rounds, camera, bloom
+│   │   ├── cinematic.ts # vignette + grain + chromatic-aberration shader pass
+│   │   ├── audio.ts     # fully synthesized WebAudio battle score
 │   │   └── tiers.ts     # wallet-unit ranks by % of supply
 │   └── server/osiris.ts # mint + pool config
 └── routes/
