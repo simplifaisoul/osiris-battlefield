@@ -1,26 +1,26 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import type { Battle, Stats, Overlay, BattleEvent, RoundResult } from '$lib/battle/engine';
+	import type { Battle, Stats, Overlay, BattleEvent, Comp } from '$lib/battle/engine';
 	import type { WarAudio } from '$lib/battle/audio';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let battle: Battle | null = null;
 	let audio: WarAudio | null = null;
 
+	const EMPTY_COMP: Comp = { spear: 0, ronin: 0, archer: 0, colossus: 0 };
 	const EMPTY: Stats = {
-		bulls: 0, bears: 0, bullPower: 0, bearPower: 0, frontPct: 50,
-		casualtiesBull: 0, casualtiesBear: 0, fps: 0, round: 1, winBull: 0, winBear: 0,
-		phase: 'battle', winner: null, totalKills: 0, biggestWhaleUsd: 0, biggestWhaleWallet: '', commanders: []
+		bulls: 0, bears: 0, bullPower: 0, bearPower: 0, frontPct: 50, casualtiesBull: 0, casualtiesBear: 0,
+		fps: 0, round: 1, winBull: 0, winBear: 0, phase: 'battle', winner: null, totalKills: 0,
+		biggestWhaleUsd: 0, biggestWhaleWallet: '', commanders: [], bullComp: { ...EMPTY_COMP }, bearComp: { ...EMPTY_COMP }
 	};
 	let stats = $state<Stats>({ ...EMPTY });
 	let overlay = $state<Overlay>({ tracked: [], titans: [] });
 	let token = $state<any>(null);
-	let feed = $state<{ id: number; text: string; team: string; big: boolean }[]>([]);
+	let feed = $state<{ id: number; text: string; side: string; amt: string; big: boolean }[]>([]);
 
 	let entered = $state(false);
 	let ready = $state(false);
 	let muted = $state(false);
-	let banner = $state<RoundResult | null>(null);
 	let flashId = $state(0);
 	function doFlash() { flashId++; }
 
@@ -30,22 +30,52 @@
 
 	const seen = new Set<string>();
 	let feedId = 1;
-	let tradeTimer: any, tokenTimer: any, clashTimer: any, bannerTimer: any;
+	let tradeTimer: any, tokenTimer: any, clashTimer: any, bannerTimer: any, clockTimer: any;
+	function tick() { clock = new Date().toISOString().slice(11, 19); }
 
 	const mask = (a: string) => (a && a.length > 8 ? a.slice(0, 4) + '…' + a.slice(-4) : a || '—');
-	const fmtUsd = (n: number) => (n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'K' : '$' + n.toFixed(0));
+	const fmtUsd = (n: number) => (n >= 1e9 ? '$' + (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'K' : '$' + n.toFixed(0));
 	const fmtPrice = (n: number) => (n >= 1 ? '$' + n.toFixed(4) : '$' + n.toPrecision(3));
 	const pctStr = (p: number) => (p >= 0.01 ? p.toFixed(2) + '%' : p.toFixed(3) + '%');
 
+	let clock = $state('');
 	let buyUsd = $state(0), sellUsd = $state(0);
 	const pressure = $derived(buyUsd + sellUsd > 0 ? (buyUsd / (buyUsd + sellUsd)) * 100 : 50);
+	const marketPressure = $derived(
+		stats.frontPct < 45 ? { t: 'BUYERS ADVANCING', c: 'green' } :
+		stats.frontPct > 55 ? { t: 'SELLERS ADVANCING', c: 'red' } : { t: 'MARKET BALANCED', c: 'dim' }
+	);
 
-	function pushFeed(text: string, team: string, big = false) {
-		feed = [{ id: feedId++, text, team, big }, ...feed].slice(0, 14);
+	// Order-book depth (stylised from live buy/sell pressure)
+	const depth = $derived.by(() => {
+		const bidH = Math.min(1, buyUsd / Math.max(1, buyUsd + sellUsd) + 0.15);
+		const askH = Math.min(1, sellUsd / Math.max(1, buyUsd + sellUsd) + 0.15);
+		const bid: string[] = [], ask: string[] = [];
+		for (let i = 0; i <= 24; i++) {
+			const t = i / 24;
+			const yb = 60 - Math.pow(t, 1.6) * 54 * bidH - (Math.sin(i * 1.7) * 2);
+			bid.push(`${t * 48},${Math.max(6, yb).toFixed(1)}`);
+			const ya = 60 - Math.pow(t, 1.6) * 54 * askH - (Math.cos(i * 1.7) * 2);
+			ask.push(`${100 - t * 48},${Math.max(6, ya).toFixed(1)}`);
+		}
+		return { bid: bid.join(' '), ask: ask.join(' ') };
+	});
+
+	function pushFeed(text: string, side: string, amt: string, big = false) {
+		feed = [{ id: feedId++, text, side, amt, big }, ...feed].slice(0, 16);
 	}
 
 	async function loadToken() {
-		try { const r = await fetch('/api/token'); if (r.ok) { token = await r.json(); battle?.setSupply(token.supply); } } catch {}
+		try {
+			const r = await fetch('/api/token');
+			if (r.ok) {
+				token = await r.json();
+				battle?.setSupply(token.supply);
+				battle?.setMomentum(token.change24h);
+				battle?.setPriceLabel(fmtPrice(token.priceUsd), '$OSIRIS · CURRENT PRICE');
+				document.title = `${fmtUsd(token.marketCap)} · $OSIRIS Battlefield`;
+			}
+		} catch {}
 	}
 	function pctOf(amount: number): number { return token?.supply ? (amount / token.supply) * 100 : 0.015; }
 
@@ -62,17 +92,24 @@
 				seen.add(t.tx);
 				const pct = pctOf(t.amount);
 				battle?.spawn({ wallet: t.wallet, kind: t.kind, usd: t.usd, pct });
-				if (!seed) pushFeed(`${mask(t.wallet)} ${t.kind === 'buy' ? 'BOUGHT' : 'SOLD'} ${pctStr(pct)} · ${fmtUsd(t.usd)}`, t.kind === 'buy' ? 'bull' : 'bear', pct >= 0.25);
+				if (!seed) {
+					const whale = pct >= 0.25, large = t.usd >= 300;
+					const price = token?.priceUsd ? fmtPrice(token.priceUsd) : '';
+					let label: string;
+					if (t.kind === 'buy') label = whale ? `LIQUIDATED SHORT @ ${price}` : large ? 'LARGE BUY TRADE' : '▲ MARKET BUY';
+					else label = whale ? `LIQUIDATED LONG @ ${price}` : large ? 'LARGE SELL TRADE' : '▼ MARKET SELL';
+					const tag = t.kind === 'buy' ? `+1 LONG · ${pctStr(pct)}` : `+1 SHORT · ${pctStr(pct)}`;
+					pushFeed(`${label}  ·  ${tag}`, t.kind === 'buy' ? 'buy' : 'sell', fmtUsd(t.usd), whale || large);
+				}
 			}
 		} catch {}
 	}
 
 	function doTrack() {
 		const w = trackInput.trim();
-		if (w.length < 32) { pushFeed('Enter a valid Solana wallet to track your unit.', 'bear'); return; }
-		tracking = true;
-		battle?.setTrackWallet(w);
-		pushFeed(`Tracking ${mask(w)} — your warriors glow gold on the field.`, 'bull');
+		if (w.length < 32) { pushFeed('Enter a valid Solana wallet to track your position.', 'sell', ''); return; }
+		tracking = true; battle?.setTrackWallet(w);
+		pushFeed(`TRACKING ${mask(w)} — your units marked on the field.`, 'buy', '');
 	}
 	function stopTrack() { tracking = false; focus = false; battle?.setTrackWallet(null); battle?.setFocus(false); }
 	function toggleFocus() { focus = !focus; battle?.setFocus(focus); }
@@ -91,9 +128,7 @@
 	async function enter() {
 		entered = true;
 		const { WarAudio } = await import('$lib/battle/audio');
-		audio = new WarAudio();
-		audio.start();
-		audio.setMuted(muted);
+		audio = new WarAudio(); audio.start(); audio.setMuted(muted);
 	}
 
 	onMount(() => {
@@ -105,16 +140,11 @@
 			battle.onStats = (s) => (stats = s);
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
-				if (e.type === 'legend') { pushFeed(`⚡ ${e.tier} DEPLOYED — ${mask(e.wallet)} moved ${pctStr(e.pct)}!`, e.team, true); audio?.horn(!!e.god); if (e.god) doFlash(); }
-			};
-			battle.onRound = (r: RoundResult) => {
-				banner = r;
-				doFlash();
-				audio?.victory(r.winner === 'bull');
-				audio?.boom();
-				clearTimeout(bannerTimer);
-				bannerTimer = setTimeout(() => (banner = null), 5500);
-				pushFeed(`— ${r.winner === 'bull' ? 'LEGION OF OSIRIS' : 'HORDE OF SET'} CONQUERS ROUND ${r.round} —`, r.winner, true);
+				if (e.type === 'legend') {
+					const c = e.cls.toUpperCase();
+					pushFeed(`⚡ ${e.tier} ${c} — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
+					audio?.horn(!!e.god); if (e.god) doFlash();
+				}
 			};
 			battle.start();
 
@@ -124,31 +154,24 @@
 			await loadTrades(true);
 			ready = true;
 
+			tick(); clockTimer = setInterval(tick, 1000);
 			tradeTimer = setInterval(() => loadTrades(false), 5000);
 			tokenTimer = setInterval(loadToken, 15000);
-			// combat clash SFX tied to live melee intensity
 			clashTimer = setInterval(() => {
 				if (!audio || muted || stats.phase !== 'battle') return;
-				if (stats.bulls > 0 && stats.bears > 0 && Math.random() < 0.7) {
-					const intensity = Math.min(1, Math.min(stats.bulls, stats.bears) / 110);
-					audio.clash(0.2 + intensity * 0.8);
-				}
+				if (stats.bulls > 0 && stats.bears > 0 && Math.random() < 0.7) audio.clash(0.2 + Math.min(1, Math.min(stats.bulls, stats.bears) / 110) * 0.8);
 			}, 360);
 		})();
 		return () => { alive = false; };
 	});
 
-	onDestroy(() => {
-		clearInterval(tradeTimer); clearInterval(tokenTimer); clearInterval(clashTimer); clearTimeout(bannerTimer);
-		audio?.dispose(); battle?.dispose();
-	});
+	onDestroy(() => { clearInterval(tradeTimer); clearInterval(tokenTimer); clearInterval(clashTimer); clearInterval(clockTimer); clearTimeout(bannerTimer); audio?.dispose(); battle?.dispose(); });
 </script>
 
-<svelte:head><title>OSIRIS · War for the Duat</title></svelte:head>
+<svelte:head><title>OSIRIS · Market Battlefield</title></svelte:head>
 
 <canvas bind:this={canvas} class="scene"></canvas>
 
-<!-- battlefield labels -->
 <div class="labels">
 	{#each overlay.titans.slice(0, 10) as t}
 		{#if t.on}<div class="titan-label" class:bear={t.team === 'bear'} style="left:{t.x}px;top:{t.y}px">{t.label}</div>{/if}
@@ -158,267 +181,215 @@
 			<div class="track-label" style="left:{u.x}px;top:{u.y}px">
 				<div class="tl-tier">◆ {u.tier}</div>
 				<div class="tl-hp"><span style="width:{(u.hp / u.maxHp) * 100}%"></span></div>
-				{#if u.kills > 0}<div class="tl-kills">{u.kills} slain</div>{/if}
 			</div>
 		{/if}
 	{/each}
 </div>
 
-<!-- INTRO -->
+{#key flashId}{#if flashId > 0}<div class="flash"></div>{/if}{/key}
+
 {#if !entered}
 	<div class="intro">
 		<div class="intro-inner">
 			<div class="intro-eye display">𓂀</div>
-			<h1 class="intro-title display">WAR FOR THE <span class="gold">DUAT</span></h1>
-			<div class="intro-tag mono">$OSIRIS · BUYS vs SELLS · LIVE ON-CHAIN</div>
+			<h1 class="intro-title display">OSIRIS <span class="green">MARKET</span> BATTLEFIELD</h1>
+			<div class="intro-tag mono">$OSIRIS · BUYS vs SELLS · LIVE ON-CHAIN WARFARE</div>
 			<p class="intro-lore">
-				In the underworld of the Duat, two eternal armies wage war over $OSIRIS.
-				Every <span class="gold">buy</span> summons a warrior to the <span class="gold">Legion of Osiris</span>.
-				Every <span class="crimson">sell</span> raises one for the <span class="crimson">Horde of Set</span>.
-				The bigger the trade, the mightier the warrior — up to a screen-shaking <span class="gold">GOD</span>.
+				Every <span class="green">buy</span> deploys a soldier for the <span class="green">bulls</span>;
+				every <span class="red">sell</span> reinforces the <span class="red">bears</span>.
+				Bigger orders field mightier units — spearmen hold the line, ronin strike, archers rain fire,
+				and whales summon <span class="green">colossus</span> war-gods. Watch the order flow fight it out in real time.
 			</p>
-			<button class="enter-btn" onclick={enter} disabled={!ready}>{ready ? '⚔  ENTER THE DUAT' : 'SUMMONING THE LEGIONS…'}</button>
-			<div class="intro-hint mono">drag to orbit · scroll to zoom · sound on</div>
+			<button class="enter-btn" onclick={enter} disabled={!ready}>{ready ? '⚔  ENTER THE BATTLEFIELD' : 'LOADING ORDER FLOW…'}</button>
+			<div class="intro-hint mono">W A S D pan · scroll zoom · drag orbit · sound on</div>
 		</div>
 	</div>
 {/if}
 
-<!-- SCREEN FLASH (god descent / victory) -->
-{#key flashId}
-	{#if flashId > 0}<div class="flash"></div>{/if}
-{/key}
-
-<!-- VICTORY BANNER -->
-{#if banner}
-	<div class="victory" class:bear={banner.winner === 'bear'}>
-		<div class="v-eye display">{banner.winner === 'bull' ? '𓂀' : '𓁟'}</div>
-		<div class="v-sub mono">ROUND {banner.round} · VICTORY</div>
-		<div class="v-title display">{banner.winner === 'bull' ? 'LEGION OF OSIRIS' : 'HORDE OF SET'}<br />CONQUERS</div>
-		<div class="v-tally mono"><span class="gold">OSIRIS {banner.winBull}</span> — <span class="crimson">{banner.winBear} SET</span></div>
-	</div>
-{/if}
-
-<!-- TOP BAR -->
+<!-- TOP: MARKET CAP + PRICE + PRESSURE -->
 <header class="topbar">
 	<div class="brand">
 		<span class="brand-mark display">☥ OSIRIS</span>
-		<span class="brand-sub mono">WAR FOR THE DUAT</span>
+		<span class="brand-sub mono">MARKET BATTLEFIELD</span>
+		<span class="brand-clock mono">UTC {clock}</span>
+	</div>
+	<div class="ticker">
+		{#if token}
+			<div class="mcap">
+				<span class="kick mono">$OSIRIS MARKET CAP · AGGREGATED SPOT</span>
+				<span class="mcap-v mono">{fmtUsd(token.marketCap)}</span>
+			</div>
+			<div class="subline mono">
+				<span class="price">{fmtPrice(token.priceUsd)}</span>
+				<span class:green={token.change24h >= 0} class:red={token.change24h < 0}>{token.change24h >= 0 ? '+' : ''}{token.change24h.toFixed(2)}% 24H</span>
+				<span class="dim">·</span>
+				<span class="pressure {marketPressure.c}">MARKET PRESSURE: {marketPressure.t}</span>
+				<span class="live-dot"></span><span class="red mono">LIVE</span>
+			</div>
+		{/if}
 	</div>
 	<div class="top-right">
-		<div class="tally glass mono">
-			<span class="dim">ROUND {stats.round}</span>
-			<span class="gold">⚔ {stats.winBull}</span><span class="dim">:</span><span class="crimson">{stats.winBear}</span>
-		</div>
-		<div class="price glass">
-			{#if token}
-				<span class="mono dim">$OSIRIS</span>
-				<span class="mono p">{fmtPrice(token.priceUsd)}</span>
-				<span class="mono" class:gold={token.change24h >= 0} class:crimson={token.change24h < 0}>{token.change24h >= 0 ? '+' : ''}{token.change24h.toFixed(2)}%</span>
-				<span class="live-dot"></span><span class="mono live">LIVE</span>
-			{/if}
-		</div>
-		<button class="icon-btn glass" onclick={toggleSound} title={muted ? 'Unmute' : 'Mute'}>{muted ? '🔇' : '🔊'}</button>
+		<div class="tally glass mono"><span class="green">{Math.round(stats.frontPct)}%</span><span class="dim">HILL</span><span class="red">{Math.round(100 - stats.frontPct)}%</span></div>
+		<button class="icon-btn glass" onclick={toggleSound}>{muted ? '🔇' : '🔊'}</button>
 	</div>
 </header>
 
-<!-- WAR METER -->
-<div class="war-meter glass">
-	<div class="wm-labels mono">
-		<span class="gold">⚔ LEGION OF OSIRIS · BUYS</span>
-		<span class="crimson">SELLS · HORDE OF SET ⚔</span>
+<!-- SELL WALL (left) -->
+<div class="wall left">
+	<div class="wall-kick mono red">SELL WALL</div>
+	<div class="wall-v mono red">{fmtUsd(sellUsd)}</div>
+</div>
+
+<!-- BUY WALL (right) -->
+<div class="wall right">
+	<div class="wall-kick mono green">BUY WALL</div>
+	<div class="wall-v mono green">{fmtUsd(buyUsd)}</div>
+</div>
+
+<!-- ORDER BOOK DEPTH (bottom-left) -->
+<div class="orderbook glass">
+	<div class="ob-head mono"><span class="dim">ORDER BOOK DEPTH</span><span class="dim">AGGREGATED SPOT</span></div>
+	<svg viewBox="0 0 100 64" class="ob-chart" preserveAspectRatio="none">
+		<polyline points="0,64 {depth.bid} 48,64" fill="rgba(20,241,149,0.16)" stroke="var(--green)" stroke-width="0.8" />
+		<polyline points="100,64 {depth.ask} 52,64" fill="rgba(255,77,94,0.16)" stroke="var(--crimson)" stroke-width="0.8" />
+		<line x1="50" y1="0" x2="50" y2="64" stroke="rgba(255,255,255,0.25)" stroke-width="0.4" stroke-dasharray="1 1.5" />
+	</svg>
+	<div class="ob-foot mono"><span class="green">BID WALL</span><span class="dim">{token ? fmtPrice(token.priceUsd) : '—'}</span><span class="red">ASK WALL</span></div>
+</div>
+
+<!-- ORDER FLOW ARMIES (bottom-left, above track) -->
+<div class="forces glass">
+	<div class="force">
+		<div class="force-head green mono">◤ BULLS · LONGS <span class="force-n">{stats.bulls}</span></div>
+		<div class="force-comp mono"><span>🛡 {stats.bullComp.spear}</span><span>🗡 {stats.bullComp.ronin}</span><span>🏹 {stats.bullComp.archer}</span><span>🐉 {stats.bullComp.colossus}</span></div>
 	</div>
-	<div class="wm-bar">
-		<div class="wm-buy" style="width:{pressure}%"></div>
-		<div class="wm-front" style="left:{stats.frontPct}%"></div>
-	</div>
-	<div class="wm-sub mono">
-		<span class="gold">{stats.bulls} units · {fmtUsd(buyUsd)}</span>
-		<span class="dim">{stats.frontPct < 42 ? 'OSIRIS PUSHING ▶' : stats.frontPct > 58 ? '◀ SET PUSHING' : 'FRONT HELD'}</span>
-		<span class="crimson">{fmtUsd(sellUsd)} · {stats.bears} units</span>
+	<div class="force">
+		<div class="force-head red mono">BEARS · SHORTS ◥ <span class="force-n">{stats.bears}</span></div>
+		<div class="force-comp mono"><span>🛡 {stats.bearComp.spear}</span><span>🗡 {stats.bearComp.ronin}</span><span>🏹 {stats.bearComp.archer}</span><span>🐉 {stats.bearComp.colossus}</span></div>
 	</div>
 </div>
 
-<!-- ARMY PANELS -->
-<div class="army left glass">
-	<div class="army-head gold display">LEGION OF OSIRIS</div>
-	<div class="army-stat"><span class="mono dim">STANDING</span><span class="mono big gold">{stats.bulls}</span></div>
-	<div class="army-stat"><span class="mono dim">FALLEN</span><span class="mono">{stats.casualtiesBull}</span></div>
-	<div class="army-stat"><span class="mono dim">24H BUYS</span><span class="mono">{token?.buys24h ?? '—'}</span></div>
-</div>
-<div class="army right glass">
-	<div class="army-head crimson display">HORDE OF SET</div>
-	<div class="army-stat"><span class="mono dim">STANDING</span><span class="mono big crimson">{stats.bears}</span></div>
-	<div class="army-stat"><span class="mono dim">FALLEN</span><span class="mono">{stats.casualtiesBear}</span></div>
-	<div class="army-stat"><span class="mono dim">24H SELLS</span><span class="mono">{token?.sells24h ?? '—'}</span></div>
-</div>
-
-<!-- COMMANDERS -->
-{#if stats.commanders.length}
-	<div class="commanders glass">
-		<div class="cmd-head mono"><span class="gold">♛</span> TOP COMMANDERS</div>
-		{#each stats.commanders as c, i}
-			<div class="cmd-row">
-				<span class="cmd-rank mono">{i + 1}</span>
-				<span class="cmd-addr mono" class:gold={c.team === 'bull'} class:crimson={c.team === 'bear'}>{mask(c.wallet)}</span>
-				<span class="cmd-tier mono dim">{c.tier}</span>
-				<span class="cmd-kills mono">{c.kills}<span class="dim"> slain</span></span>
+<!-- MARKET FEED (bottom-right) -->
+<div class="feed glass">
+	<div class="feed-head mono"><span>MARKET FEED</span><span class="green">● LIVE</span></div>
+	<div class="feed-rows">
+		{#each feed as f (f.id)}
+			<div class="feed-row" class:big={f.big} class:buy={f.side === 'buy'} class:sell={f.side === 'sell'}>
+				<span class="feed-text mono">{f.text}</span>
+				{#if f.amt}<span class="feed-amt mono">{f.amt}</span>{/if}
 			</div>
 		{/each}
 	</div>
-{/if}
-
-<!-- SESSION -->
-<div class="session glass mono">
-	<span class="dim">TOTAL SLAIN</span> <span class="s-val">{stats.totalKills.toLocaleString()}</span>
-	<span class="dim">· BIGGEST WHALE</span> <span class="s-val gold">{stats.biggestWhaleUsd > 0 ? fmtUsd(stats.biggestWhaleUsd) : '—'}</span>
-	{#if stats.biggestWhaleWallet}<span class="dim">{mask(stats.biggestWhaleWallet)}</span>{/if}
 </div>
 
-<!-- KILLFEED -->
-<div class="feed">
-	{#each feed as f (f.id)}
-		<div class="feed-row glass" class:big={f.big} class:bull={f.team === 'bull'} class:bear={f.team === 'bear'}>
-			<span class="feed-tag mono">{f.team === 'bull' ? '⬆' : '⬇'}</span>
-			<span class="feed-text mono">{f.text}</span>
-		</div>
-	{/each}
-</div>
-
-<!-- TRACK YOUR UNIT -->
+<!-- TRACK POSITION (bottom-right, below feed) -->
 <div class="track glass">
-	<div class="track-head mono"><span class="gold">◆</span> TRACK YOUR UNIT</div>
 	{#if !tracking}
 		<div class="track-row">
-			<input class="input" bind:value={trackInput} placeholder="Your Solana wallet…" onkeydown={(e) => e.key === 'Enter' && doTrack()} />
-			<button class="btn btn-gold" onclick={doTrack}>TRACK</button>
+			<input class="input" bind:value={trackInput} placeholder="Track your wallet…" onkeydown={(e) => e.key === 'Enter' && doTrack()} />
+			<button class="btn btn-green" onclick={doTrack}>TRACK</button>
 		</div>
-		<div class="track-hint mono dim">Enter your wallet to find your warriors on the field.</div>
 	{:else}
-		<div class="track-live">
+		<div class="track-live mono">
 			{#if trackedSummary}
-				<div class="ts-row"><span class="mono dim">UNITS ON FIELD</span><span class="mono gold big">{trackedSummary.count}</span></div>
-				<div class="ts-row"><span class="mono dim">HIGHEST RANK</span><span class="mono">{trackedSummary.best}</span></div>
-				<div class="ts-row"><span class="mono dim">ENEMIES SLAIN</span><span class="mono crimson">{trackedSummary.kills}</span></div>
-			{:else}
-				<div class="ts-empty mono dim">No living units for this wallet. Buy or sell to deploy one ⚔</div>
-			{/if}
-			<div class="track-actions">
-				<button class="btn" class:btn-gold={focus} onclick={toggleFocus}>{focus ? '◉ FOLLOWING' : '⤢ FOLLOW CAM'}</button>
-				<button class="btn" onclick={stopTrack}>✕ STOP</button>
-			</div>
+				<span class="dim">YOUR UNITS</span> <span class="green">{trackedSummary.count}</span>
+				<span class="dim">· RANK</span> <span>{trackedSummary.best}</span>
+				<span class="dim">· SLAIN</span> <span class="red">{trackedSummary.kills}</span>
+			{:else}<span class="dim">No live units — trade to deploy ⚔</span>{/if}
+			<button class="mini" class:on={focus} onclick={toggleFocus}>{focus ? '◉ FOLLOW' : '⤢ FOLLOW'}</button>
+			<button class="mini" onclick={stopTrack}>✕</button>
 		</div>
 	{/if}
 </div>
 
-<div class="cam-hint mono dim">drag to orbit · scroll to zoom{#if !focus} · <button class="link" onclick={resetCam}>reset cam</button>{/if}</div>
+<div class="controls mono dim">
+	<span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> PAN · <span class="key">SCROLL</span> ZOOM · DRAG ORBIT · <button class="link" onclick={resetCam}>RESET</button>
+</div>
 
 <style>
 	.scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; z-index: 0; touch-action: none; }
 	.labels { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
-
-	.titan-label { position: absolute; transform: translate(-50%, -100%); font-family: var(--display); font-size: 13px; font-weight: 800; color: var(--gold-hi); text-shadow: 0 0 10px rgba(var(--gold-rgb),0.8), 0 2px 4px #000; letter-spacing: 0.1em; white-space: nowrap; }
-	.titan-label.bear { color: #ff9aa6; text-shadow: 0 0 10px rgba(var(--crimson-rgb),0.8), 0 2px 4px #000; }
+	.titan-label { position: absolute; transform: translate(-50%, -100%); font-family: var(--display); font-size: 12px; font-weight: 800; color: #7dffb0; text-shadow: 0 0 10px rgba(20,241,149,0.8), 0 2px 4px #000; white-space: nowrap; }
+	.titan-label.bear { color: #ff9aa6; text-shadow: 0 0 10px rgba(255,77,94,0.8), 0 2px 4px #000; }
 	.track-label { position: absolute; transform: translate(-50%, -100%); text-align: center; white-space: nowrap; }
-	.tl-tier { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 8px var(--gold), 0 2px 3px #000; }
-	.tl-hp { width: 46px; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.6); margin: 3px auto 0; overflow: hidden; border: 1px solid rgba(var(--gold-rgb),0.5); }
-	.tl-hp span { display: block; height: 100%; background: var(--gold); }
-	.tl-kills { font-family: var(--mono); font-size: 8px; color: var(--gold-hi); margin-top: 2px; text-shadow: 0 1px 2px #000; }
+	.tl-tier { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 8px var(--green), 0 2px 3px #000; }
+	.tl-hp { width: 44px; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.6); margin: 3px auto 0; overflow: hidden; border: 1px solid rgba(20,241,149,0.5); }
+	.tl-hp span { display: block; height: 100%; background: var(--green); }
 
-	/* Intro */
-	.intro { position: fixed; inset: 0; z-index: 60; background: radial-gradient(circle at 50% 40%, rgba(20,12,8,0.7), rgba(4,3,6,0.96)); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; animation: rise 0.5s both; }
-	.intro-inner { text-align: center; max-width: 560px; padding: 30px; }
-	.intro-eye { font-size: 70px; color: var(--gold); text-shadow: 0 0 40px rgba(var(--gold-rgb),0.6); animation: glow 3s infinite; }
-	.intro-title { font-size: 52px; font-weight: 900; letter-spacing: 0.06em; margin: 12px 0 10px; color: #fff; }
-	.intro-tag { font-size: 11px; letter-spacing: 0.35em; color: var(--gold); margin-bottom: 22px; }
-	.intro-lore { font-size: 14px; line-height: 1.9; color: var(--text-2); margin-bottom: 30px; }
-	.enter-btn { font-family: var(--mono); font-size: 15px; font-weight: 700; letter-spacing: 0.14em; padding: 16px 38px; border-radius: 12px; cursor: pointer; color: #1a1204; border: none; background: linear-gradient(120deg, var(--gold-hi), var(--gold)); box-shadow: 0 0 40px rgba(var(--gold-rgb),0.4); transition: transform 0.2s; }
-	.enter-btn:hover:not(:disabled) { transform: translateY(-2px) scale(1.02); }
-	.enter-btn:disabled { opacity: 0.5; cursor: wait; background: rgba(255,255,255,0.1); color: var(--text-2); box-shadow: none; }
-	.intro-hint { margin-top: 20px; font-size: 9px; letter-spacing: 0.25em; color: var(--text-3); }
-
-	/* Screen flash */
-	.flash { position: fixed; inset: 0; z-index: 58; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(255,242,214,0.75), rgba(255,220,180,0.3) 60%, transparent 100%); animation: flashfade 0.65s ease-out forwards; }
+	.flash { position: fixed; inset: 0; z-index: 58; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(255,255,255,0.6), rgba(200,255,220,0.2) 60%, transparent 100%); animation: flashfade 0.65s ease-out forwards; }
 	@keyframes flashfade { from { opacity: 1; } to { opacity: 0; } }
 
-	/* Victory */
-	.victory { position: fixed; inset: 0; z-index: 55; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; pointer-events: none; animation: rise 0.5s both; background: radial-gradient(circle at 50% 50%, rgba(var(--gold-rgb),0.12), transparent 60%); }
-	.victory.bear { background: radial-gradient(circle at 50% 50%, rgba(var(--crimson-rgb),0.14), transparent 60%); }
-	.v-eye { font-size: 64px; color: var(--gold); text-shadow: 0 0 40px rgba(var(--gold-rgb),0.8); }
-	.victory.bear .v-eye { color: var(--crimson); text-shadow: 0 0 40px rgba(var(--crimson-rgb),0.8); }
-	.v-sub { font-size: 12px; letter-spacing: 0.4em; color: var(--text-2); }
-	.v-title { font-size: 46px; font-weight: 900; text-align: center; line-height: 1.1; color: #fff; text-shadow: 0 0 30px rgba(var(--gold-rgb),0.5); letter-spacing: 0.04em; }
-	.victory.bear .v-title { text-shadow: 0 0 30px rgba(var(--crimson-rgb),0.5); }
-	.v-tally { font-size: 15px; letter-spacing: 0.15em; margin-top: 8px; }
+	.intro { position: fixed; inset: 0; z-index: 60; background: radial-gradient(circle at 50% 40%, rgba(14,20,12,0.7), rgba(4,6,4,0.96)); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; animation: rise 0.5s both; }
+	.intro-inner { text-align: center; max-width: 580px; padding: 30px; }
+	.intro-eye { font-size: 66px; color: var(--green); text-shadow: 0 0 40px rgba(20,241,149,0.5); }
+	.intro-title { font-size: 44px; font-weight: 900; letter-spacing: 0.04em; margin: 12px 0 10px; color: #fff; }
+	.intro-tag { font-size: 11px; letter-spacing: 0.28em; color: var(--green); margin-bottom: 22px; }
+	.intro-lore { font-size: 14px; line-height: 1.9; color: var(--text-2); margin-bottom: 30px; }
+	.enter-btn { font-family: var(--mono); font-size: 15px; font-weight: 700; letter-spacing: 0.12em; padding: 16px 38px; border-radius: 12px; cursor: pointer; color: #05130b; border: none; background: linear-gradient(120deg, #5effa0, var(--green)); box-shadow: 0 0 40px rgba(20,241,149,0.4); transition: transform 0.2s; }
+	.enter-btn:hover:not(:disabled) { transform: translateY(-2px) scale(1.02); }
+	.enter-btn:disabled { opacity: 0.5; cursor: wait; background: rgba(255,255,255,0.1); color: var(--text-2); box-shadow: none; }
+	.intro-hint { margin-top: 20px; font-size: 9px; letter-spacing: 0.22em; color: var(--text-3); }
 
-	.topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 22px; pointer-events: none; }
-	.brand { display: flex; flex-direction: column; }
-	.brand-mark { font-size: 22px; font-weight: 800; color: var(--gold); letter-spacing: 0.08em; text-shadow: 0 0 20px rgba(var(--gold-rgb),0.4); }
-	.brand-sub { font-size: 8px; letter-spacing: 0.4em; color: var(--text-3); margin-top: 2px; }
-	.top-right { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
-	.tally { display: flex; align-items: center; gap: 8px; padding: 11px 14px; font-size: 12px; font-weight: 700; }
-	.price { display: flex; align-items: center; gap: 10px; padding: 11px 16px; }
-	.price .p { font-size: 15px; font-weight: 700; color: #fff; }
-	.price .live { color: var(--crimson); font-size: 10px; letter-spacing: 0.1em; }
-	.icon-btn { padding: 10px 13px; cursor: pointer; border: 1px solid var(--line); font-size: 14px; color: var(--text); }
-	.icon-btn:hover { border-color: rgba(var(--gold-rgb),0.5); }
+	.topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; display: flex; align-items: flex-start; justify-content: space-between; padding: 16px 22px; pointer-events: none; }
+	.brand { display: flex; flex-direction: column; width: 200px; }
+	.brand-mark { font-size: 20px; font-weight: 800; color: var(--green); letter-spacing: 0.08em; text-shadow: 0 0 20px rgba(20,241,149,0.4); }
+	.brand-sub { font-size: 8px; letter-spacing: 0.36em; color: var(--text-3); margin-top: 2px; }
+	.brand-clock { font-size: 10px; letter-spacing: 0.1em; color: var(--text-2); margin-top: 5px; }
+	.ticker { text-align: center; }
+	.mcap { display: flex; flex-direction: column; align-items: center; }
+	.mcap .kick { font-size: 9px; letter-spacing: 0.2em; color: var(--text-3); }
+	.mcap-v { font-size: 40px; font-weight: 800; color: #fff; line-height: 1.05; text-shadow: 0 2px 20px rgba(0,0,0,0.6); }
+	.subline { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 12px; margin-top: 4px; }
+	.subline .price { color: #fff; font-weight: 700; }
+	.pressure { font-weight: 700; letter-spacing: 0.05em; }
+	.pressure.green { color: var(--green); } .pressure.red { color: var(--crimson); } .pressure.dim { color: var(--text-2); }
+	.top-right { display: flex; align-items: center; gap: 10px; pointer-events: auto; width: 200px; justify-content: flex-end; }
+	.tally { display: flex; gap: 6px; padding: 10px 12px; font-size: 12px; font-weight: 700; }
+	.icon-btn { padding: 9px 12px; cursor: pointer; border: 1px solid var(--line); font-size: 14px; color: var(--text); }
 
-	.war-meter { position: fixed; top: 62px; left: 50%; transform: translateX(-50%); z-index: 10; width: min(620px, 90vw); padding: 12px 18px; }
-	.wm-labels { display: flex; justify-content: space-between; font-size: 9px; letter-spacing: 0.08em; margin-bottom: 8px; }
-	.wm-bar { position: relative; height: 14px; border-radius: 8px; overflow: hidden; background: linear-gradient(90deg, rgba(var(--crimson-rgb),0.35), rgba(var(--crimson-rgb),0.55)); }
-	.wm-buy { height: 100%; background: linear-gradient(90deg, rgba(var(--gold-rgb),0.65), var(--gold)); box-shadow: 0 0 16px rgba(var(--gold-rgb),0.5); transition: width 0.8s cubic-bezier(0.16,1,0.3,1); }
-	.wm-front { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #fff; box-shadow: 0 0 10px #fff; transition: left 0.8s cubic-bezier(0.16,1,0.3,1); }
-	.wm-sub { display: flex; justify-content: space-between; font-size: 9px; margin-top: 8px; letter-spacing: 0.05em; }
+	.wall { position: fixed; top: 92px; z-index: 10; }
+	.wall.left { left: 22px; text-align: left; }
+	.wall.right { right: 22px; text-align: right; }
+	.wall-kick { font-size: 10px; letter-spacing: 0.2em; opacity: 0.8; }
+	.wall-v { font-size: 26px; font-weight: 800; text-shadow: 0 0 20px currentColor; }
 
-	.army { position: fixed; top: 150px; z-index: 10; width: 168px; padding: 14px 16px; }
-	.army.left { left: 22px; }
-	.army.right { right: 22px; }
-	.army-head { font-size: 13px; font-weight: 800; letter-spacing: 0.08em; margin-bottom: 12px; }
-	.army-stat { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
-	.army-stat .mono { font-size: 12px; }
-	.army-stat .dim { font-size: 9px; letter-spacing: 0.1em; }
-	.army-stat .big { font-size: 22px; font-weight: 700; }
+	.orderbook { position: fixed; left: 22px; bottom: 118px; z-index: 10; width: 260px; padding: 12px 14px; }
+	.ob-head { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: 0.12em; margin-bottom: 8px; }
+	.ob-chart { width: 100%; height: 72px; display: block; }
+	.ob-foot { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: 0.1em; margin-top: 6px; }
 
-	.commanders { position: fixed; top: 306px; left: 22px; z-index: 10; width: 210px; padding: 12px 14px; }
-	.cmd-head { font-size: 10px; letter-spacing: 0.12em; color: #fff; margin-bottom: 10px; }
-	.cmd-row { display: grid; grid-template-columns: 14px 1fr auto; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
-	.cmd-rank { font-size: 10px; color: var(--text-3); }
-	.cmd-addr { font-size: 11px; }
-	.cmd-tier { font-size: 8px; letter-spacing: 0.1em; grid-column: 2; }
-	.cmd-kills { font-size: 11px; color: #fff; }
+	.forces { position: fixed; left: 22px; bottom: 60px; z-index: 10; width: 260px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+	.force-head { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; display: flex; justify-content: space-between; }
+	.force-n { color: #fff; }
+	.force-comp { display: flex; gap: 12px; font-size: 10px; color: var(--text-2); margin-top: 3px; }
 
-	.session { position: fixed; top: 306px; right: 22px; z-index: 10; width: 210px; padding: 12px 14px; font-size: 10px; line-height: 1.9; letter-spacing: 0.04em; }
-	.session .s-val { color: #fff; font-weight: 700; }
-
-	.feed { position: fixed; bottom: 18px; left: 22px; z-index: 10; width: 340px; display: flex; flex-direction: column-reverse; gap: 6px; max-height: 40vh; }
-	.feed-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; animation: slidein 0.35s both; border-left: 2px solid transparent; }
-	.feed-row.bull { border-left-color: var(--gold); }
-	.feed-row.bear { border-left-color: var(--crimson); }
-	.feed-row.big { box-shadow: 0 0 24px rgba(var(--gold-rgb),0.25); }
-	.feed-tag { font-size: 12px; }
-	.feed-row.bull .feed-tag { color: var(--gold); }
-	.feed-row.bear .feed-tag { color: var(--crimson); }
+	.feed { position: fixed; right: 22px; bottom: 66px; z-index: 10; width: 340px; padding: 10px 12px; }
+	.feed-head { display: flex; justify-content: space-between; font-size: 9px; letter-spacing: 0.15em; color: var(--text-3); margin-bottom: 8px; }
+	.feed-rows { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow: hidden; }
+	.feed-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 8px; border-left: 2px solid transparent; background: rgba(255,255,255,0.02); animation: slidein 0.3s both; }
+	.feed-row.buy { border-left-color: var(--green); }
+	.feed-row.sell { border-left-color: var(--crimson); }
+	.feed-row.big { box-shadow: 0 0 18px rgba(20,241,149,0.16); }
 	.feed-text { font-size: 10px; color: var(--text); letter-spacing: 0.02em; }
+	.feed-row.buy .feed-text { color: #9affc4; } .feed-row.sell .feed-text { color: #ffb0b8; }
+	.feed-amt { font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
 
-	.track { position: fixed; bottom: 18px; right: 22px; z-index: 10; width: 300px; padding: 16px; }
-	.track-head { font-size: 11px; letter-spacing: 0.12em; color: #fff; margin-bottom: 12px; }
+	.track { position: fixed; right: 22px; bottom: 22px; z-index: 10; width: 340px; padding: 10px 12px; }
 	.track-row { display: flex; gap: 8px; }
 	.track-row .input { flex: 1; }
-	.track-hint { font-size: 9px; margin-top: 8px; line-height: 1.5; }
-	.ts-row { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); }
-	.ts-row .dim { font-size: 9px; letter-spacing: 0.1em; }
-	.ts-row .mono { font-size: 12px; }
-	.ts-row .big { font-size: 20px; font-weight: 700; }
-	.ts-empty { font-size: 9px; line-height: 1.6; padding: 8px 0; }
-	.track-actions { display: flex; gap: 8px; margin-top: 12px; }
-	.track-actions .btn { flex: 1; text-align: center; }
+	.btn-green { border-color: rgba(20,241,149,0.5); background: linear-gradient(120deg, rgba(20,241,149,0.2), rgba(20,241,149,0.06)); color: #9affc4; }
+	.track-live { display: flex; align-items: center; gap: 7px; font-size: 10px; flex-wrap: wrap; }
+	.mini { font-family: var(--mono); font-size: 9px; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: rgba(255,255,255,0.03); color: var(--text-2); cursor: pointer; }
+	.mini.on { border-color: rgba(20,241,149,0.5); color: var(--green); }
 
-	.cam-hint { position: fixed; bottom: 6px; left: 50%; transform: translateX(-50%); z-index: 10; font-size: 8px; letter-spacing: 0.2em; }
-	.link { background: none; border: none; color: var(--gold); cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0; }
+	.controls { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10; font-size: 9px; letter-spacing: 0.14em; display: flex; align-items: center; gap: 6px; }
+	.key { display: inline-block; border: 1px solid var(--line-2); border-radius: 4px; padding: 2px 6px; color: var(--text-2); }
+	.link { background: none; border: none; color: var(--green); cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0; }
 
-	@media (max-width: 900px) {
-		.army, .track, .commanders, .session { display: none; }
-		.feed { width: calc(100vw - 44px); max-height: 26vh; }
-		.war-meter { top: 58px; }
-		.intro-title { font-size: 38px; }
+	@media (max-width: 1000px) {
+		.orderbook, .forces, .track { display: none; }
+		.feed { width: calc(100vw - 44px); bottom: 40px; }
+		.mcap-v { font-size: 30px; }
+		.brand, .top-right { width: auto; }
 	}
 </style>
