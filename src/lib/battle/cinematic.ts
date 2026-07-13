@@ -6,9 +6,9 @@ export function makeCinematicPass(): ShaderPass {
 		uniforms: {
 			tDiffuse: { value: null },
 			time: { value: 0 },
-			vignette: { value: 1.15 },
-			grain: { value: 0.06 },
-			aberration: { value: 0.0016 },
+			vignette: { value: 1.05 },
+			grain: { value: 0.035 },
+			aberration: { value: 0.0012 },
 			flash: { value: 0 }
 		},
 		vertexShader: `
@@ -43,15 +43,19 @@ export function makeCinematicPass(): ShaderPass {
 				col.g = texture2D(tDiffuse, uv).g;
 				col.b = texture2D(tDiffuse, uv + dir * a).b;
 
+				// gentle filmic contrast + warm grade
+				col = mix(col, col * col * (3.0 - 2.0 * col), 0.18);
+				col *= vec3(1.05, 1.0, 0.93);
+
 				// vignette
-				float vig = smoothstep(0.9, 0.25, d * vignette);
-				col *= mix(0.55, 1.0, vig);
+				float vig = smoothstep(0.95, 0.32, d * vignette);
+				col *= mix(0.62, 1.0, vig);
 
 				// film grain
 				float g = hash(uv * vec2(1920.0, 1080.0) + time) - 0.5;
 				col += g * grain;
 
-				// battle flash (white pulse on god descent / victory)
+				// battle flash (warm pulse on god descent / victory)
 				col += flash * vec3(1.0, 0.92, 0.7);
 
 				gl_FragColor = vec4(col, 1.0);

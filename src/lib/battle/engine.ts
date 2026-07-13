@@ -70,6 +70,7 @@ type Unit = {
 	dying: number;
 	tracked: boolean;
 	legend: boolean;
+	melee: boolean;
 };
 
 const MAX = 900;
@@ -86,16 +87,25 @@ const CRIMSON = new THREE.Color('#FF3B4E');
 
 function buildWarrior(): THREE.BufferGeometry {
 	const parts: THREE.BufferGeometry[] = [];
-	const leg = new THREE.BoxGeometry(0.16, 0.72, 0.18);
+	// legs (tapered)
+	const leg = new THREE.CylinderGeometry(0.1, 0.07, 0.72, 5);
 	const l1 = leg.clone(); l1.translate(-0.13, 0.36, 0);
 	const l2 = leg.clone(); l2.translate(0.13, 0.36, 0);
-	const torso = new THREE.BoxGeometry(0.52, 0.78, 0.3); torso.translate(0, 1.08, 0);
-	const head = new THREE.SphereGeometry(0.2, 8, 6); head.translate(0, 1.62, 0);
-	const helm = new THREE.ConeGeometry(0.22, 0.28, 6); helm.translate(0, 1.82, 0);
-	const spear = new THREE.CylinderGeometry(0.03, 0.03, 1.9, 5); spear.rotateZ(0.18); spear.translate(0.34, 1.15, 0.08);
-	const tip = new THREE.ConeGeometry(0.07, 0.22, 6); tip.rotateZ(0.18); tip.translate(0.52, 2.05, 0.08);
-	const shield = new THREE.BoxGeometry(0.06, 0.52, 0.42); shield.translate(-0.32, 1.05, 0);
-	parts.push(l1, l2, torso, head, helm, spear, tip, shield);
+	// torso + a shoulder taper for a soldier silhouette
+	const torso = new THREE.BoxGeometry(0.5, 0.7, 0.28); torso.translate(0, 1.05, 0);
+	const shoulders = new THREE.BoxGeometry(0.62, 0.16, 0.34); shoulders.translate(0, 1.36, 0);
+	const head = new THREE.SphereGeometry(0.18, 8, 6); head.translate(0, 1.58, 0);
+	// plumed helm
+	const helm = new THREE.ConeGeometry(0.2, 0.3, 6); helm.translate(0, 1.78, 0);
+	const plume = new THREE.BoxGeometry(0.05, 0.26, 0.18); plume.translate(0, 1.98, -0.05);
+	// flowing cape
+	const cape = new THREE.PlaneGeometry(0.5, 0.9); cape.rotateY(Math.PI / 2); cape.rotateX(0.16); cape.translate(-0.17, 0.95, 0);
+	// spear + blade tip
+	const spear = new THREE.CylinderGeometry(0.028, 0.028, 2.0, 5); spear.rotateZ(0.14); spear.translate(0.36, 1.2, 0.08);
+	const tip = new THREE.ConeGeometry(0.06, 0.24, 6); tip.rotateZ(0.14); tip.translate(0.52, 2.14, 0.08);
+	// round shield
+	const shield = new THREE.CylinderGeometry(0.28, 0.28, 0.05, 12); shield.rotateZ(Math.PI / 2); shield.translate(-0.32, 1.02, 0);
+	parts.push(l1, l2, torso, shoulders, head, helm, plume, cape, spear, tip, shield);
 	const merged = mergeGeometries(parts, false)!;
 	merged.computeVertexNormals();
 	return merged;
@@ -230,7 +240,7 @@ export class Battle {
 		this.renderer.shadowMap.enabled = true;
 		this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 		this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-		this.renderer.toneMappingExposure = 1.1;
+		this.renderer.toneMappingExposure = 0.95;
 
 		this.scene.background = skyTexture();
 		this.scene.fog = new THREE.FogExp2(0x160f18, 0.0105);
@@ -260,7 +270,7 @@ export class Battle {
 
 		this.composer = new EffectComposer(this.renderer);
 		this.composer.addPass(new RenderPass(this.scene, this.camera));
-		this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.6, 0.16));
+		this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.42, 0.7, 0.5));
 		this.cine = makeCinematicPass();
 		this.composer.addPass(this.cine);
 		this.composer.addPass(new OutputPass());
@@ -324,19 +334,23 @@ export class Battle {
 	private buildCapital(color: THREE.Color, x: number): THREE.Mesh {
 		const m = new THREE.Mesh(
 			new THREE.ConeGeometry(11, 20, 4),
-			new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.5), emissive: color, emissiveIntensity: 0.35, metalness: 0.4, roughness: 0.5, flatShading: true })
+			new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.32), emissive: color, emissiveIntensity: 0.18, metalness: 0.5, roughness: 0.42, flatShading: true })
 		);
 		m.position.set(x, 10, 0);
 		m.rotation.y = Math.PI / 4;
 		m.castShadow = true;
+		// a thin glowing capstone so it reads without the whole pyramid glowing
+		const cap = new THREE.Mesh(new THREE.ConeGeometry(2.2, 3.4, 4), new THREE.MeshBasicMaterial({ color }));
+		cap.position.set(0, 11, 0); cap.rotation.y = Math.PI / 4;
+		m.add(cap);
 		this.scene.add(m);
 		return m;
 	}
 
 	private buildFrontLine(): THREE.Mesh {
 		const m = new THREE.Mesh(
-			new THREE.PlaneGeometry(3.2, ARENA_Z * 2 + 10),
-			new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,235,190,0.9)'), color: 0xffffff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false })
+			new THREE.PlaneGeometry(5, ARENA_Z * 2 + 10),
+			new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,180,120,0.7)'), color: 0xffaa66, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false })
 		);
 		m.rotation.x = -Math.PI / 2;
 		m.position.y = 0.06;
@@ -345,7 +359,7 @@ export class Battle {
 	}
 
 	private buildArmy(geo: THREE.BufferGeometry, base: THREE.Color, emissive: number): THREE.InstancedMesh {
-		const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive, emissiveIntensity: 0.5, metalness: 0.35, roughness: 0.55 });
+		const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive, emissiveIntensity: 0.22, metalness: 0.4, roughness: 0.5 });
 		const mesh = new THREE.InstancedMesh(geo, mat, MAX);
 		mesh.castShadow = true;
 		mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -371,7 +385,7 @@ export class Battle {
 		}
 		const g = new THREE.BufferGeometry();
 		g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-		this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xd8b070, size: 0.18, transparent: true, opacity: 0.3, depthWrite: false })));
+		this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(216,176,112,0.9)'), color: 0xd8b070, size: 0.3, transparent: true, opacity: 0.16, depthWrite: false, alphaTest: 0.35 })));
 	}
 
 	private buildSparks() {
@@ -384,7 +398,7 @@ export class Battle {
 		const g = new THREE.BufferGeometry();
 		g.setAttribute('position', new THREE.BufferAttribute(this.sparkPos, 3));
 		g.setAttribute('color', new THREE.BufferAttribute(this.sparkColor, 3));
-		this.sparks = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.42, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+		this.sparks = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,255,255,0.95)'), size: 0.5, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, alphaTest: 0.35 }));
 		this.sparks.frustumCulled = false;
 		this.scene.add(this.sparks);
 	}
@@ -400,7 +414,7 @@ export class Battle {
 		const g = new THREE.BufferGeometry();
 		g.setAttribute('position', new THREE.BufferAttribute(this.soulPos, 3));
 		g.setAttribute('color', new THREE.BufferAttribute(this.soulColor, 3));
-		this.souls = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,255,255,0.9)'), size: 1.5, vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+		this.souls = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,255,255,0.9)'), size: 1.5, vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, alphaTest: 0.25 }));
 		this.souls.frustumCulled = false;
 		this.scene.add(this.souls);
 	}
@@ -412,34 +426,33 @@ export class Battle {
 		for (let i = 0; i < N; i++) this.resetEmber(i, true);
 		const g = new THREE.BufferGeometry();
 		g.setAttribute('position', new THREE.BufferAttribute(this.emberPos, 3));
-		this.embers = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffa94b, size: 0.3, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+		this.embers = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,170,80,0.95)'), color: 0xffa94b, size: 0.38, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, alphaTest: 0.3 }));
 		this.embers.frustumCulled = false;
 		this.scene.add(this.embers);
 	}
 	private resetEmber(i: number, spread = false) {
-		this.emberPos[i * 3] = this.frontX + (Math.random() - 0.5) * (spread ? 120 : 10);
-		this.emberPos[i * 3 + 1] = Math.random() * (spread ? 26 : 1);
+		this.emberPos[i * 3] = this.frontX + (Math.random() - 0.5) * (spread ? 100 : 14);
+		this.emberPos[i * 3 + 1] = Math.random() * (spread ? 12 : 0.5);
 		this.emberPos[i * 3 + 2] = (Math.random() - 0.5) * ARENA_Z * 2.2;
-		this.emberVel[i * 3] = (Math.random() - 0.5) * 0.6;
-		this.emberVel[i * 3 + 1] = 1.4 + Math.random() * 2.2;
-		this.emberVel[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
+		this.emberVel[i * 3] = (Math.random() - 0.5) * 0.5;
+		this.emberVel[i * 3 + 1] = 1.1 + Math.random() * 1.8;
+		this.emberVel[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
 	}
 
 	private buildAuras() {
-		const pillarGeo = new THREE.CylinderGeometry(0.34, 0.5, 12, 8, 1, true);
-		pillarGeo.translate(0, 6, 0);
-		const ringGeo = new THREE.TorusGeometry(1.5, 0.06, 8, 32);
-		const ring2Geo = new THREE.TorusGeometry(2.4, 0.05, 8, 32);
+		// Subtle ground runes + a floating crown — no blinding vertical beams.
+		const runeGeo = new THREE.RingGeometry(1.05, 1.3, 40);
+		const rune2Geo = new THREE.RingGeometry(1.55, 1.68, 40);
+		const crownGeo = new THREE.OctahedronGeometry(0.2, 0);
 		for (let i = 0; i < 12; i++) {
 			const grp = new THREE.Group();
-			const pillar = new THREE.Mesh(pillarGeo, new THREE.MeshBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
-			const r1 = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
-			r1.rotation.x = Math.PI / 2; r1.position.y = 0.6; r1.name = 'r1';
-			const r2 = new THREE.Mesh(ring2Geo, new THREE.MeshBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-			r2.rotation.x = Math.PI / 2; r2.position.y = 1.1; r2.name = 'r2';
-			const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: radialTexture('rgba(255,240,200,0.8)'), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-			glow.scale.set(7, 7, 1); glow.position.y = 0.3; glow.name = 'glow';
-			grp.add(pillar, r1, r2, glow);
+			const r1 = new THREE.Mesh(runeGeo, new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+			r1.rotation.x = -Math.PI / 2; r1.position.y = 0.08; r1.name = 'r1';
+			const r2 = new THREE.Mesh(rune2Geo, new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+			r2.rotation.x = -Math.PI / 2; r2.position.y = 0.08; r2.name = 'r2';
+			const crown = new THREE.Mesh(crownGeo, new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffcf70, emissiveIntensity: 0.7, metalness: 0.6, roughness: 0.3 }));
+			crown.name = 'crown';
+			grp.add(r1, r2, crown);
 			grp.visible = false;
 			this.scene.add(grp);
 			this.auras.push(grp);
@@ -515,7 +528,7 @@ export class Battle {
 			z: (Math.random() - 0.5) * ARENA_Z * 2,
 			rank: atFront ? Math.random() * 3 : Math.random() * 6,
 			bob: Math.random() * Math.PI * 2, kills: 0, idx, dying: 0,
-			tracked: !!this.trackWallet && wallet === this.trackWallet, legend
+			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false
 		});
 	}
 
@@ -588,7 +601,7 @@ export class Battle {
 		const ep = this.emberPos, ev = this.emberVel;
 		for (let i = 0; i < this.EMBER_N; i++) {
 			ep[i * 3] += ev[i * 3] * dt; ep[i * 3 + 1] += ev[i * 3 + 1] * dt; ep[i * 3 + 2] += ev[i * 3 + 2] * dt;
-			if (ep[i * 3 + 1] > 30) this.resetEmber(i);
+			if (ep[i * 3 + 1] > 15) this.resetEmber(i);
 		}
 		(this.embers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
 	}
@@ -641,7 +654,8 @@ export class Battle {
 			const tx = this.frontX + u.sign * (0.7 + u.rank * 0.9);
 			u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), SPEED * dt);
 			const distToFront = u.team === 'bull' ? this.frontX - u.x : u.x - this.frontX;
-			if (distToFront < MELEE) (u.team === 'bull' ? meleeBulls : meleeBears).push(u);
+			u.melee = distToFront < MELEE;
+			if (u.melee) (u.team === 'bull' ? meleeBulls : meleeBears).push(u);
 		}
 
 		if (meleeBulls.length && meleeBears.length) {
@@ -660,10 +674,10 @@ export class Battle {
 		this.writeArmy(this.bear, 'bear');
 
 		this.frontLine.position.x = this.frontX;
-		(this.frontLine.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.sin(this.time * 5) * 0.12;
+		(this.frontLine.material as THREE.MeshBasicMaterial).opacity = 0.18 + Math.sin(this.time * 5) * 0.06;
 		const bullThreat = THREE.MathUtils.clamp((this.frontX + FRONT_MAX) / (FRONT_MAX * 2), 0, 1);
-		(this.capitalBull.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.35 + (1 - bullThreat) * 1.0;
-		(this.capitalBear.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.35 + bullThreat * 1.0;
+		(this.capitalBull.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.18 + (1 - bullThreat) * 0.5;
+		(this.capitalBear.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.18 + bullThreat * 0.5;
 
 		// victory detection
 		if (this.frontX > WIN_THRESH) { if (this.winSide !== 'bull') { this.winSide = 'bull'; this.winHold = 0; } this.winHold += dt; }
@@ -700,8 +714,8 @@ export class Battle {
 		const win = this.winner === 'bull' ? this.capitalBull : this.capitalBear;
 		loser.scale.setScalar(Math.max(0.02, k));
 		loser.position.y = 10 * k;
-		(loser.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.35 + (1 - k) * 3;
-		(win.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.4 + Math.sin(this.time * 8) * 0.6;
+		(loser.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.2 + (1 - k) * 1.5;
+		(win.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.6 + Math.sin(this.time * 8) * 0.3;
 		if (Math.random() < 0.5) this.spawnBurst(loser.position.x + (Math.random() - 0.5) * 12, Math.random() * 14 * k + 1, (Math.random() - 0.5) * 12, this.winner === 'bull' ? CRIMSON : GOLD, 3);
 
 		if (remain <= 0) this.resetRound();
@@ -744,16 +758,26 @@ export class Battle {
 			if (u.team !== team) continue;
 			if (u.dying <= 0 && u.hp <= 0) continue;
 			const d = this.dummy;
+			const faceY = u.sign < 0 ? 0 : Math.PI;
+			const s = u.scale * UNIT_SCALE;
 			if (u.dying > 0) {
 				const t = u.dying / 0.6;
 				d.position.set(u.x, -(1 - t) * 1.2, u.z);
-				d.scale.setScalar(u.scale * UNIT_SCALE * t);
-				d.rotation.set((1 - t) * 1.4, u.sign < 0 ? 0 : Math.PI, 0);
+				d.scale.setScalar(s * t);
+				d.rotation.set((1 - t) * 1.5, faceY, (1 - t) * 0.6);
+			} else if (u.melee) {
+				// stabbing lunge toward the enemy line
+				const dir = u.team === 'bull' ? 1 : -1;
+				const lunge = Math.max(0, Math.sin(this.time * 11 + u.bob));
+				d.position.set(u.x + dir * lunge * 0.5, Math.abs(Math.sin(u.bob * 2)) * 0.06 * u.scale, u.z);
+				d.scale.setScalar(s);
+				d.rotation.set(dir * lunge * 0.32, faceY, 0);
 			} else {
-				const bobY = Math.abs(Math.sin(u.bob)) * 0.12 * u.scale;
-				d.position.set(u.x, bobY, u.z);
-				d.scale.setScalar(u.scale * UNIT_SCALE);
-				d.rotation.set(0, u.sign < 0 ? 0 : Math.PI, Math.sin(u.bob) * 0.05);
+				// marching gait — bob + forward lean rock
+				const gait = Math.sin(u.bob);
+				d.position.set(u.x, Math.abs(gait) * 0.18 * u.scale, u.z);
+				d.scale.setScalar(s);
+				d.rotation.set(gait * 0.12, faceY, Math.sin(u.bob * 0.5) * 0.05);
 			}
 			d.updateMatrix();
 			mesh.setMatrixAt(u.idx, d.matrix);
@@ -811,16 +835,18 @@ export class Battle {
 				const g = this.auras[ai++];
 				g.visible = true;
 				g.position.set(u.x, 0, u.z);
-				const col = u.tracked ? 0xfff2c0 : u.team === 'bull' ? 0xffd070 : 0xff6a7a;
+				const col = u.tracked ? 0xffe9b0 : u.team === 'bull' ? 0xffcf70 : 0xff7a86;
 				const s = u.scale * UNIT_SCALE;
-				g.scale.setScalar(THREE.MathUtils.clamp(s * 0.8, 0.7, 3));
-				const r1 = g.getObjectByName('r1'); const r2 = g.getObjectByName('r2');
-				if (r1) r1.rotation.z += dt * 1.4;
-				if (r2) r2.rotation.z -= dt * 1.0;
-				g.traverse((o) => {
-					const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
-					if (m && 'color' in m) m.color.setHex(col);
-				});
+				g.scale.setScalar(THREE.MathUtils.clamp(s, 0.8, 3.4));
+				const r1 = g.getObjectByName('r1'); const r2 = g.getObjectByName('r2'); const crown = g.getObjectByName('crown');
+				if (r1) { r1.rotation.z += dt * 0.6; (((r1 as THREE.Mesh).material) as THREE.MeshBasicMaterial).color.setHex(col); }
+				if (r2) { r2.rotation.z -= dt * 0.4; (((r2 as THREE.Mesh).material) as THREE.MeshBasicMaterial).color.setHex(col); }
+				if (crown) {
+					crown.position.y = s * 2.4 + Math.sin(this.time * 2 + u.bob) * 0.12;
+					crown.rotation.y += dt * 1.6;
+					const cm = (crown as THREE.Mesh).material as THREE.MeshStandardMaterial;
+					cm.emissive.setHex(col);
+				}
 			}
 		}
 		for (; ai < this.auras.length; ai++) this.auras[ai].visible = false;
