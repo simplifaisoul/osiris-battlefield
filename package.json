@@ -22,6 +22,8 @@
 		"vite": "^8.0.16"
 	},
 	"dependencies": {
+		"postprocessing": "^6.39.2",
+		"simplex-noise": "^4.0.3",
 		"three": "^0.169.0"
 	}
 }

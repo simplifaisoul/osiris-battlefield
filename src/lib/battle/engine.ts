@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { makeCinematicPass } from './cinematic';
+import {
+	EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, VignetteEffect,
+	NoiseEffect, ChromaticAberrationEffect, ToneMappingEffect, ToneMappingMode,
+	GodRaysEffect, BrightnessContrastEffect, HueSaturationEffect, KernelSize, BlendFunction
+} from 'postprocessing';
+import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, type Tier } from './tiers';
 
 export type Team = 'bull' | 'bear';
@@ -161,8 +161,7 @@ export class Battle {
 	private renderer: THREE.WebGLRenderer;
 	private scene = new THREE.Scene();
 	private camera: THREE.PerspectiveCamera;
-	private composer: EffectComposer;
-	private cine: ShaderPass;
+	private composer!: EffectComposer;
 	private bull: THREE.InstancedMesh;
 	private bear: THREE.InstancedMesh;
 	private units: Unit[] = [];
@@ -178,10 +177,9 @@ export class Battle {
 	private statTick = 0;
 	private fpsAvg = 60;
 
-	// slow-mo + flash
+	// slow-mo
 	private timeScale = 1;
 	private slowmo = 0;
-	private flash = 0;
 
 	// round system
 	private phase: 'battle' | 'victory' = 'battle';
@@ -239,8 +237,7 @@ export class Battle {
 		this.renderer.setSize(innerWidth, innerHeight);
 		this.renderer.shadowMap.enabled = true;
 		this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-		this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-		this.renderer.toneMappingExposure = 0.95;
+		this.renderer.toneMapping = THREE.NoToneMapping; // handled by the postprocessing ToneMappingEffect
 
 		this.scene.background = skyTexture();
 		this.scene.fog = new THREE.FogExp2(0x160f18, 0.0105);
@@ -268,18 +265,48 @@ export class Battle {
 		this.buildEmbers();
 		this.buildAuras();
 
-		this.composer = new EffectComposer(this.renderer);
-		this.composer.addPass(new RenderPass(this.scene, this.camera));
-		this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.42, 0.7, 0.5));
-		this.cine = makeCinematicPass();
-		this.composer.addPass(this.cine);
-		this.composer.addPass(new OutputPass());
+		this.buildComposer();
 
 		this._resize = this.resize.bind(this);
 		addEventListener('resize', this._resize);
 		this.bindCamera(canvas);
 	}
 	private _resize: () => void;
+
+	// ---------- rendering pipeline ----------
+
+	private buildComposer() {
+		// Warm sun disc low on the horizon — the source for volumetric god rays.
+		const sun = new THREE.Mesh(new THREE.SphereGeometry(22, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffcf8a }));
+		sun.position.set(46, 56, -205);
+		sun.frustumCulled = false;
+		this.scene.add(sun);
+
+		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: THREE.HalfFloatType });
+		this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+		const godRays = new GodRaysEffect(this.camera, sun, {
+			density: 0.93, decay: 0.94, weight: 0.5, exposure: 0.55, samples: 40,
+			clampMax: 1, kernelSize: KernelSize.MEDIUM, blur: true, resolutionScale: 0.5
+		});
+		const bloom = new BloomEffect({ intensity: 0.85, luminanceThreshold: 0.62, luminanceSmoothing: 0.32, mipmapBlur: true, radius: 0.75, kernelSize: KernelSize.HUGE });
+		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
+		const bc = new BrightnessContrastEffect({ brightness: 0.03, contrast: 0.12 });
+		const hs = new HueSaturationEffect({ saturation: 0.12 });
+		const vignette = new VignetteEffect({ offset: 0.32, darkness: 0.5 });
+		const ca = new ChromaticAberrationEffect({ offset: new THREE.Vector2(0.0006, 0.0006), radialModulation: true, modulationOffset: 0.45 });
+		const noise = new NoiseEffect({ blendFunction: BlendFunction.SOFT_LIGHT });
+		(noise as unknown as { blendMode: { opacity: { value: number } } }).blendMode.opacity.value = 0.22;
+		const smaa = new SMAAEffect();
+
+		// Each convolution effect (god rays, bloom, CA, SMAA) needs its own pass;
+		// the cheap per-pixel effects merge into one.
+		this.composer.addPass(new EffectPass(this.camera, godRays));
+		this.composer.addPass(new EffectPass(this.camera, bloom));
+		this.composer.addPass(new EffectPass(this.camera, tone, bc, hs, vignette, noise));
+		this.composer.addPass(new EffectPass(this.camera, ca));
+		this.composer.addPass(new EffectPass(this.camera, smaa));
+	}
 
 	// ---------- scene build ----------
 
@@ -325,7 +352,20 @@ export class Battle {
 
 	private buildGround() {
 		const mat = new THREE.MeshStandardMaterial({ map: groundTexture(), roughness: 0.96, metalness: 0 });
-		const g = new THREE.Mesh(new THREE.PlaneGeometry(320, 170), mat);
+		const geo = new THREE.PlaneGeometry(420, 260, 240, 150);
+		// Displace into rolling desert dunes, but keep the battle arena flat so troops stand true.
+		const noise2D = createNoise2D(() => 0.42);
+		const pos = geo.attributes.position as THREE.BufferAttribute;
+		for (let i = 0; i < pos.count; i++) {
+			const px = pos.getX(i), py = pos.getY(i); // world x, and -z after rotation
+			const outX = Math.max(0, Math.abs(px) - (CAP + 10));
+			const outZ = Math.max(0, Math.abs(py) - (ARENA_Z + 12));
+			const falloff = THREE.MathUtils.clamp((outX + outZ) / 46, 0, 1);
+			const h = (noise2D(px * 0.018, py * 0.018) * 5 + noise2D(px * 0.05, py * 0.05) * 1.6) * falloff;
+			pos.setZ(i, h);
+		}
+		geo.computeVertexNormals();
+		const g = new THREE.Mesh(geo, mat);
 		g.rotation.x = -Math.PI / 2;
 		g.receiveShadow = true;
 		this.scene.add(g);
@@ -511,7 +551,7 @@ export class Battle {
 		}
 		if (legend) {
 			this.shake = Math.min(1.6, this.shake + (god ? 1.4 : 0.7));
-			if (god) { this.slowmo = 1.1; this.flash = Math.min(1, this.flash + 0.7); }
+			if (god) this.slowmo = 1.1;
 		}
 		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
 	}
@@ -537,6 +577,7 @@ export class Battle {
 	dispose() {
 		cancelAnimationFrame(this.raf);
 		removeEventListener('resize', this._resize);
+		this.composer.dispose();
 		this.renderer.dispose();
 	}
 
@@ -622,7 +663,6 @@ export class Battle {
 		const targetScale = this.slowmo > 0 ? 0.32 : 1;
 		this.timeScale += (targetScale - this.timeScale) * Math.min(1, rawDt * 6);
 		const simDt = dt * this.timeScale;
-		this.flash = Math.max(0, this.flash - rawDt * 1.6);
 
 		if (this.phase === 'battle') this.step(simDt);
 		else this.stepVictory(rawDt);
@@ -693,7 +733,6 @@ export class Battle {
 		this.phase = 'victory';
 		this.winner = winner;
 		this.victoryEnd = performance.now() + 6000;
-		this.flash = 1;
 		this.shake = 1.6;
 		if (winner === 'bull') this.winBull++; else this.winBear++;
 		const loser = winner === 'bull' ? this.capitalBear : this.capitalBull;
@@ -821,10 +860,7 @@ export class Battle {
 		this.camera.lookAt(target);
 
 		this.updateAuras(dt);
-
-		this.cine.uniforms.time.value = this.time;
-		this.cine.uniforms.flash.value = this.flash * 0.6;
-		this.composer.render();
+		this.composer.render(dt);
 	}
 
 	private updateAuras(dt: number) {

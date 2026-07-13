@@ -56,7 +56,9 @@ The dead don't just vanish — their **souls rise into the Duat** as glowing wis
 
 ## Features
 
-- **Real-time 3D** — three.js with instanced armies (up to ~900/side), dynamic shadows, ACES tone mapping, UnrealBloom, and a custom **cinematic pass** (vignette + film grain + chromatic aberration).
+- **Real-time 3D** — three.js with instanced armies (up to ~900/side) and dynamic shadows.
+- **Pro post-processing pipeline** (pmndrs [`postprocessing`](https://github.com/pmndrs/postprocessing)) — volumetric **god rays**, HDR **bloom**, **ACES** tone mapping, colour grade, **vignette**, chromatic aberration, film grain, and **SMAA** anti-aliasing.
+- **Procedural dune terrain** — the desert is displaced with [`simplex-noise`](https://github.com/jwagner/simplex-noise.js) into rolling dunes on the horizon, with the battle arena kept flat.
 - **Procedural audio** — fully synthesized war-drum ambience, metallic clashes tied to melee intensity, deep horns on Titan/God arrivals, and a victory fanfare + capital-collapse boom. All WebAudio, zero asset files.
 - **Round & victory system** — tug-of-war front line, capital collapse, win tally, auto-resetting rounds (framerate-independent timing).
 - **Souls, embers, divine auras** — dead warriors ascend; embers drift off the front; legends stand under rotating light-pillars.
@@ -87,9 +89,9 @@ npm run dev            # → http://localhost:5175
 src/
 ├── lib/
 │   ├── battle/
-│   │   ├── engine.ts    # the 3D war: scene, instanced armies, tug-of-war,
-│   │   │                #   combat, souls/embers/auras, rounds, camera, bloom
-│   │   ├── cinematic.ts # vignette + grain + chromatic-aberration shader pass
+│   │   ├── engine.ts    # the 3D war: scene, instanced armies, dune terrain,
+│   │   │                #   tug-of-war combat, souls/embers/auras, rounds,
+│   │   │                #   camera, and the postprocessing pipeline
 │   │   ├── audio.ts     # fully synthesized WebAudio battle score
 │   │   └── tiers.ts     # wallet-unit ranks by % of supply
 │   └── server/osiris.ts # mint + pool config

@@ -21,6 +21,8 @@
 	let ready = $state(false);
 	let muted = $state(false);
 	let banner = $state<RoundResult | null>(null);
+	let flashId = $state(0);
+	function doFlash() { flashId++; }
 
 	let trackInput = $state('');
 	let tracking = $state(false);
@@ -103,10 +105,11 @@
 			battle.onStats = (s) => (stats = s);
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
-				if (e.type === 'legend') { pushFeed(`⚡ ${e.tier} DEPLOYED — ${mask(e.wallet)} moved ${pctStr(e.pct)}!`, e.team, true); audio?.horn(!!e.god); }
+				if (e.type === 'legend') { pushFeed(`⚡ ${e.tier} DEPLOYED — ${mask(e.wallet)} moved ${pctStr(e.pct)}!`, e.team, true); audio?.horn(!!e.god); if (e.god) doFlash(); }
 			};
 			battle.onRound = (r: RoundResult) => {
 				banner = r;
+				doFlash();
 				audio?.victory(r.winner === 'bull');
 				audio?.boom();
 				clearTimeout(bannerTimer);
@@ -179,6 +182,11 @@
 		</div>
 	</div>
 {/if}
+
+<!-- SCREEN FLASH (god descent / victory) -->
+{#key flashId}
+	{#if flashId > 0}<div class="flash"></div>{/if}
+{/key}
 
 <!-- VICTORY BANNER -->
 {#if banner}
@@ -327,6 +335,10 @@
 	.enter-btn:hover:not(:disabled) { transform: translateY(-2px) scale(1.02); }
 	.enter-btn:disabled { opacity: 0.5; cursor: wait; background: rgba(255,255,255,0.1); color: var(--text-2); box-shadow: none; }
 	.intro-hint { margin-top: 20px; font-size: 9px; letter-spacing: 0.25em; color: var(--text-3); }
+
+	/* Screen flash */
+	.flash { position: fixed; inset: 0; z-index: 58; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(255,242,214,0.75), rgba(255,220,180,0.3) 60%, transparent 100%); animation: flashfade 0.65s ease-out forwards; }
+	@keyframes flashfade { from { opacity: 1; } to { opacity: 0; } }
 
 	/* Victory */
 	.victory { position: fixed; inset: 0; z-index: 55; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; pointer-events: none; animation: rise 0.5s both; background: radial-gradient(circle at 50% 50%, rgba(var(--gold-rgb),0.12), transparent 60%); }
