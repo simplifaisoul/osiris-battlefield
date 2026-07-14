@@ -59,7 +59,7 @@
 		if (token) battle?.setMarketCap(fmtUsd(token.marketCap), win.chg);
 		// reinforcement flow scaled from the window's real txn rate
 		const scale = 30; // battle-time amplification
-		const rate = (n: number) => Math.min(0.55, Math.max(0.03, (n / TF_SECS[tf]) * scale));
+		const rate = (n: number) => Math.min(0.85, Math.max(0.06, (n / TF_SECS[tf]) * scale));
 		battle?.setReinforceRates(rate(win.buys), rate(win.sells));
 	}
 	function setTf(next: TF) { tf = next; applyTf(); }

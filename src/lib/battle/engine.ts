@@ -47,14 +47,14 @@ type Unit = {
 };
 
 // per-class attack pacing (seconds between strikes)
-const ATK_CD: Record<Cls, number> = { spear: 1.05, ronin: 0.62, archer: 1.4, colossus: 2.8 };
-const KILL_TEMPO = 2.3; // global lethality multiplier (per-hit = dmg * cd * tempo)
-const ACQUIRE_R = 14; // how far a melee unit will lock onto an enemy
+const ATK_CD: Record<Cls, number> = { spear: 1.05, ronin: 0.62, archer: 1.15, colossus: 2.6 };
+const KILL_TEMPO = 2.6; // global lethality multiplier (per-hit = dmg * cd * tempo)
+const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
 const MAX = 340;
-const FRONT_MAX = 27;
-const CAP = FRONT_MAX + 16;
-const ARENA_Z = 26;
+const FRONT_MAX = 33;
+const CAP = FRONT_MAX + 17;
+const ARENA_Z = 36;
 const MELEE = 4.2;
 const SPEED = 11;
 const UNIT_SCALE = 1.9;
@@ -64,7 +64,7 @@ const CLASS_STATS: Record<Cls, { hpMul: number; dmgMul: number; scaleMul: number
 	spear: { hpMul: 1.0, dmgMul: 1.0, scaleMul: 1.0, ranged: false, standoff: 0.8, speedMul: 1.0 },
 	ronin: { hpMul: 0.78, dmgMul: 1.9, scaleMul: 0.95, ranged: false, standoff: 0.6, speedMul: 1.4 },
 	archer: { hpMul: 0.55, dmgMul: 1.7, scaleMul: 0.9, ranged: true, standoff: 13, speedMul: 1.05 },
-	colossus: { hpMul: 2.4, dmgMul: 2.4, scaleMul: 1.0, ranged: true, standoff: 10, speedMul: 0.6 }
+	colossus: { hpMul: 2.4, dmgMul: 2.4, scaleMul: 0.55, ranged: true, standoff: 12, speedMul: 0.6 }
 };
 
 const GOLD = new THREE.Color('#2fd66b');
@@ -74,6 +74,11 @@ const CRIMSON = new THREE.Color('#ff5560');
 const HILL_H = 6;
 const HILL_SIG = FRONT_MAX * 0.85;
 function hillY(x: number): number { return HILL_H * Math.exp(-(x * x) / (2 * HILL_SIG * HILL_SIG)); }
+// ground height a unit stands on — matches the terrain's z-taper so nothing floats at the rim
+function groundY(x: number, z: number): number {
+	const zTaper = THREE.MathUtils.clamp(1 - (Math.abs(z) - ARENA_Z) / 14, 0, 1);
+	return hillY(x) * zTaper;
+}
 
 function hash01(s: string): number {
 	let h = 2166136261;
@@ -611,7 +616,7 @@ export class Battle {
 			if (this.decalLife[i] <= 0) continue;
 			this.decalLife[i] -= dt;
 			const k = THREE.MathUtils.clamp(this.decalLife[i] / 26, 0, 1);
-			this.dummy.position.set(this.decalX[i], hillY(this.decalX[i]) + 0.03 + (i % 9) * 0.0022, this.decalZ[i]);
+			this.dummy.position.set(this.decalX[i], groundY(this.decalX[i], this.decalZ[i]) + 0.03 + (i % 9) * 0.0022, this.decalZ[i]);
 			this.dummy.rotation.set(0, (i * 0.7) % Math.PI, 0);
 			this.dummy.scale.setScalar(this.decalBase[i] * Math.sqrt(k));
 			this.dummy.updateMatrix();
@@ -643,8 +648,13 @@ export class Battle {
 			this.camYaw -= dx * 0.005; this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * 0.0035, 0.05, 0.95); this.manualUntil = performance.now() + 7000;
 		});
 		canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + Math.sign(e.deltaY) * 0.08), 0.45, 2.0); }, { passive: false });
-		addEventListener('keydown', (e) => { const k = e.key.toLowerCase(); if ('wasd'.includes(k)) this.keys.add(k); });
+		addEventListener('keydown', (e) => {
+			const tag = (e.target as HTMLElement)?.tagName;
+			if (tag === 'INPUT' || tag === 'TEXTAREA') return; // never hijack typing
+			const k = e.key.toLowerCase(); if ('wasd'.includes(k)) this.keys.add(k);
+		});
 		addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+		addEventListener('blur', () => this.keys.clear()); // no stuck pan on alt-tab
 	}
 
 	// ---------- public API ----------
@@ -696,7 +706,7 @@ export class Battle {
 			bob: Math.random() * Math.PI * 2, age: 0, cd: Math.random() * 1.5, kills: 0, idx, dying: 0,
 			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false,
 			target: null, retarget: Math.random() * 0.4, atkCd: Math.random() * 0.8, strike: 0,
-			face: sign < 0 ? Math.PI / 2 : -Math.PI / 2,
+			face: sign < 0 ? 0 : Math.PI, // rotY that points local +x (weapon/barrel) at the enemy side
 			tint: 0.92 + Math.random() * 0.16, struck: 0
 		});
 	}
@@ -892,20 +902,21 @@ export class Battle {
 				u.melee = false;
 				const tx = this.frontX + u.sign * (u.standoff + u.rank * 0.9);
 				u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), u.speed * dt);
+				if (u.target && (u.target.dying > 0 || u.target.hp <= 0)) u.target = null;
 				if (u.target) {
-					desiredFace = Math.PI / 2 + Math.atan2(-(u.target.z - u.z), u.target.x - u.x);
+					desiredFace = Math.atan2(-(u.target.z - u.z), u.target.x - u.x);
 					if (u.atkCd <= 0) {
 						if (u.cls === 'colossus') { this.fireShellAt(u, u.target); u.atkCd = ATK_CD.colossus + Math.random() * 0.9; }
 						else { this.fireArrowAt(u, u.target); u.atkCd = ATK_CD.archer + Math.random() * 0.7; }
 						u.strike = 0.3;
 					}
 				}
-			} else if (u.target) {
+			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0) {
 				const t = u.target;
 				const dx = t.x - u.x, dz = t.z - u.z;
 				const dist = Math.hypot(dx, dz);
 				const reach = (u.scale + t.scale) * 0.5 * UNIT_SCALE * 1.1 + (u.cls === 'colossus' ? 1.1 : 0.45);
-				desiredFace = Math.PI / 2 + Math.atan2(-dz, dx);
+				desiredFace = Math.atan2(-dz, dx);
 				if (dist > reach) {
 					// charge the target
 					const step = Math.min(dist - reach * 0.9, u.speed * dt);
@@ -952,7 +963,7 @@ export class Battle {
 				while (dAng < -Math.PI) dAng += Math.PI * 2;
 				u.face += dAng * Math.min(1, dt * 9);
 			} else {
-				const home = u.sign < 0 ? Math.PI / 2 : -Math.PI / 2;
+				const home = u.sign < 0 ? 0 : Math.PI;
 				let dAng = home - u.face;
 				while (dAng > Math.PI) dAng -= Math.PI * 2;
 				while (dAng < -Math.PI) dAng += Math.PI * 2;
@@ -982,8 +993,12 @@ export class Battle {
 				}
 			}
 		}
-		// keep everyone inside the arena
-		for (const u of this.units) { if (u.dying <= 0) u.z = THREE.MathUtils.clamp(u.z, -ARENA_Z - 2, ARENA_Z + 2); }
+		// keep everyone inside the arena and off the capitals
+		for (const u of this.units) {
+			if (u.dying > 0) continue;
+			u.z = THREE.MathUtils.clamp(u.z, -ARENA_Z - 2, ARENA_Z + 2);
+			u.x = THREE.MathUtils.clamp(u.x, -CAP + 3, CAP - 3);
+		}
 
 		this.updateInstances();
 
@@ -996,6 +1011,7 @@ export class Battle {
 	}
 
 	private kill(u: Unit, killers: Unit[]) {
+		if (u.dying > 0) return; // already down — never double-count a casualty
 		u.dying = 8; // fall, lie as a casualty on the field, then fade
 		this.spawnBurst(u.x, hillY(u.x) + 1.2, u.z, u.team === 'bull' ? GOLD : CRIMSON, u.legend ? 40 : 9);
 		this.spawnSoul(u.x, hillY(u.x) + 1.6, u.z, u.team === 'bull' ? GOLD : CRIMSON);
@@ -1012,7 +1028,7 @@ export class Battle {
 			const u = this.units[i];
 			if (u.dying <= 0 && u.hp <= 0) continue;
 			const mesh = this.armies[`${u.team}:${u.cls}`].mesh;
-			const d = this.dummy, gy = hillY(u.x);
+			const d = this.dummy, gy = groundY(u.x, u.z);
 			// spawn pop-in (Clash-style overshoot)
 			const pop = u.age < 0.45 ? easeOutBack(Math.min(1, u.age / 0.45)) : 1;
 			const s = u.scale * UNIT_SCALE * Math.max(0.01, pop);
@@ -1021,10 +1037,19 @@ export class Battle {
 				const elapsed = 8 - u.dying;
 				const fall = Math.min(1, elapsed / 0.45);
 				const fade = u.dying < 1 ? u.dying : 1;
-				const flop = (u.idx % 2 === 0 ? 1 : -1) * fall * (Math.PI / 2) * 0.94;
+				// tanks don't flop on their side — they slump and burn out
+				const flopAmt = u.cls === 'colossus' ? 0.16 : 0.94;
+				const flop = (u.idx % 2 === 0 ? 1 : -1) * fall * (Math.PI / 2) * flopAmt;
 				d.position.set(u.x, gy + (1 - fall) * 0.2 - (1 - fade) * 0.55, u.z);
 				d.scale.setScalar(s * (0.55 + fade * 0.45));
 				d.rotation.set(0, u.face, flop);
+			} else if (u.ranged && u.cls === 'colossus') {
+				// tank: steady, recoil kick backwards on fire
+				const recoil = u.strike > 0 ? Math.sin((0.3 - u.strike) / 0.3 * Math.PI) * 0.4 : 0;
+				const fx = Math.cos(u.face), fz = -Math.sin(u.face);
+				d.position.set(u.x - fx * recoil, gy + 0.02, u.z - fz * recoil);
+				d.scale.setScalar(s);
+				d.rotation.set(recoil * 0.06, u.face, 0);
 			} else if (u.ranged) {
 				const hop = Math.abs(Math.sin(u.bob * 0.6)) * 0.06 * u.scale;
 				// draw-and-loose: lean back on strike, snap forward on release
@@ -1037,7 +1062,7 @@ export class Battle {
 				const t = 1 - u.strike / 0.32; // 0 → 1 over the swing
 				const swing = t < 0.35 ? -t / 0.35 * 0.55 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'colossus' ? 0.95 : 0.7);
 				const lungeF = t < 0.35 ? 0 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'ronin' ? 0.7 : 0.4);
-				const fx = Math.sin(u.face), fz = Math.cos(u.face); // forward from face angle
+				const fx = Math.cos(u.face), fz = -Math.sin(u.face); // forward (local +x) from face angle
 				d.position.set(u.x + fx * lungeF, gy + Math.abs(Math.sin(u.bob * 2)) * 0.06 * u.scale, u.z + fz * lungeF);
 				d.scale.setScalar(s);
 				d.rotation.set(swing, u.face, 0);
@@ -1074,7 +1099,7 @@ export class Battle {
 			if (this.keys.has('s')) { this.panX += sy * spd; this.panZ += cy * spd; }
 			if (this.keys.has('a')) { this.panX -= cy * spd; this.panZ += sy * spd; }
 			if (this.keys.has('d')) { this.panX += cy * spd; this.panZ -= sy * spd; }
-			this.panX = THREE.MathUtils.clamp(this.panX, -46, 46); this.panZ = THREE.MathUtils.clamp(this.panZ, -34, 34);
+			this.panX = THREE.MathUtils.clamp(this.panX, -56, 56); this.panZ = THREE.MathUtils.clamp(this.panZ, -44, 44);
 		}
 
 		let target = new THREE.Vector3(this.panX, 3, this.panZ);
@@ -1107,7 +1132,7 @@ export class Battle {
 		for (const u of this.units) {
 			if (ai >= this.auras.length) break;
 			if ((u.tracked || u.legend) && u.dying <= 0) {
-				const g = this.auras[ai++]; g.visible = true; g.position.set(u.x, hillY(u.x) + 0.02, u.z);
+				const g = this.auras[ai++]; g.visible = true; g.position.set(u.x, groundY(u.x, u.z) + 0.02, u.z);
 				const col = u.tracked ? 0xffffff : u.team === 'bull' ? 0x5effa0 : 0xff7a86; const s = u.scale * UNIT_SCALE;
 				g.scale.setScalar(THREE.MathUtils.clamp(s, 0.8, 3.4));
 				const r1 = g.getObjectByName('r1'), r2 = g.getObjectByName('r2'), crown = g.getObjectByName('crown');
