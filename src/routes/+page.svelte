@@ -16,7 +16,7 @@
 	let stats = $state<Stats>({ ...EMPTY });
 	let overlay = $state<Overlay>({ tracked: [], titans: [] });
 	let token = $state<any>(null);
-	let feed = $state<{ id: number; text: string; side: string; amt: string; big: boolean }[]>([]);
+	let feed = $state<{ id: number; text: string; side: string; amt: string; big: boolean; stamp: string }[]>([]);
 
 	let entered = $state(false);
 	let ready = $state(false);
@@ -40,6 +40,29 @@
 
 	let clock = $state('');
 	let buyUsd = $state(0), sellUsd = $state(0);
+
+	// ── battle timeframe: 5M / 1H / 24H ──
+	type TF = 'm5' | 'h1' | 'h24';
+	let tf = $state<TF>('h1');
+	const TF_LABEL: Record<TF, string> = { m5: '5M', h1: '1H', h24: '24H' };
+	const TF_SECS: Record<TF, number> = { m5: 300, h1: 3600, h24: 86400 };
+	const win = $derived.by(() => {
+		const chg = token?.change?.[tf] ?? 0;
+		const vol = token?.volume?.[tf] ?? 0;
+		const buys = token?.txns?.[tf]?.buys ?? 0;
+		const sells = token?.txns?.[tf]?.sells ?? 0;
+		const tot = buys + sells || 1;
+		return { chg, vol, buys, sells, buyVol: vol * (buys / tot), sellVol: vol * (sells / tot), buyPct: (buys / tot) * 100 };
+	});
+	function applyTf() {
+		battle?.setMomentum(win.chg);
+		if (token) battle?.setMarketCap(fmtUsd(token.marketCap), win.chg);
+		// reinforcement flow scaled from the window's real txn rate
+		const scale = 30; // battle-time amplification
+		const rate = (n: number) => Math.min(1.1, Math.max(0.04, (n / TF_SECS[tf]) * scale));
+		battle?.setReinforceRates(rate(win.buys), rate(win.sells));
+	}
+	function setTf(next: TF) { tf = next; applyTf(); }
 	const pressure = $derived(buyUsd + sellUsd > 0 ? (buyUsd / (buyUsd + sellUsd)) * 100 : 50);
 	const marketPressure = $derived(
 		stats.frontPct < 45 ? { t: 'BUYERS ADVANCING', c: 'green' } :
@@ -61,8 +84,9 @@
 		return { bid: bid.join(' '), ask: ask.join(' ') };
 	});
 
-	function pushFeed(text: string, side: string, amt: string, big = false) {
-		feed = [{ id: feedId++, text, side, amt, big }, ...feed].slice(0, 16);
+	function pushFeed(text: string, side: string, amt: string, big = false, ts?: number) {
+		const stamp = new Date((ts ?? Date.now() / 1000) * 1000).toISOString().slice(11, 19);
+		feed = [{ id: feedId++, text, side, amt, big, stamp }, ...feed].slice(0, 16);
 	}
 
 	async function loadToken() {
@@ -71,9 +95,9 @@
 			if (r.ok) {
 				token = await r.json();
 				battle?.setSupply(token.supply);
-				battle?.setMomentum(token.change24h);
 				battle?.setPriceLabel(fmtPrice(token.priceUsd), '$OSIRIS · CURRENT PRICE');
 				document.title = `${fmtUsd(token.marketCap)} · $OSIRIS Battlefield`;
+				applyTf();
 			}
 		} catch {}
 	}
@@ -99,7 +123,7 @@
 					if (t.kind === 'buy') label = whale ? `LIQUIDATED SHORT @ ${price}` : large ? 'LARGE BUY TRADE' : '▲ MARKET BUY';
 					else label = whale ? `LIQUIDATED LONG @ ${price}` : large ? 'LARGE SELL TRADE' : '▼ MARKET SELL';
 					const tag = t.kind === 'buy' ? `+1 LONG · ${pctStr(pct)}` : `+1 SHORT · ${pctStr(pct)}`;
-					pushFeed(`${label}  ·  ${tag}`, t.kind === 'buy' ? 'buy' : 'sell', fmtUsd(t.usd), whale || large);
+					pushFeed(`${label}  ·  ${tag}`, t.kind === 'buy' ? 'buy' : 'sell', fmtUsd(t.usd), whale || large, t.ts);
 				}
 			}
 		} catch {}
@@ -221,10 +245,20 @@
 			</div>
 			<div class="subline mono">
 				<span class="price">{fmtPrice(token.priceUsd)}</span>
-				<span class:green={token.change24h >= 0} class:red={token.change24h < 0}>{token.change24h >= 0 ? '+' : ''}{token.change24h.toFixed(2)}% 24H</span>
+				<span class:green={win.chg >= 0} class:red={win.chg < 0}>{win.chg >= 0 ? '+' : ''}{win.chg.toFixed(2)}% {TF_LABEL[tf]}</span>
 				<span class="dim">·</span>
 				<span class="pressure {marketPressure.c}">MARKET PRESSURE: {marketPressure.t}</span>
 				<span class="live-dot"></span><span class="red mono">LIVE</span>
+			</div>
+			<div class="tf-row mono">
+				<div class="tf-toggle">
+					{#each (['m5', 'h1', 'h24'] as const) as t}
+						<button class="tf-btn" class:on={tf === t} onclick={() => setTf(t)}>{TF_LABEL[t]}</button>
+					{/each}
+				</div>
+				<span class="chip"><span class="dim">VOL</span> {fmtUsd(win.vol)}</span>
+				<span class="chip"><span class="dim">TXNS</span> <span class="green">{win.buys}B</span><span class="dim">/</span><span class="red">{win.sells}S</span></span>
+				<span class="chip"><span class="dim">FLOW</span> <span class:green={win.buyPct >= 50} class:red={win.buyPct < 50}>{win.buyPct.toFixed(0)}% BUY</span></span>
 			</div>
 		{/if}
 	</div>
@@ -236,14 +270,16 @@
 
 <!-- SELL WALL (left) -->
 <div class="wall left">
-	<div class="wall-kick mono red">SELL WALL</div>
-	<div class="wall-v mono red">{fmtUsd(sellUsd)}</div>
+	<div class="wall-kick mono red">SELL WALL · {TF_LABEL[tf]}</div>
+	<div class="wall-v mono red">{fmtUsd(win.sellVol)}</div>
+	<div class="wall-sub mono dim">TAPE {fmtUsd(sellUsd)}</div>
 </div>
 
 <!-- BUY WALL (right) -->
 <div class="wall right">
-	<div class="wall-kick mono green">BUY WALL</div>
-	<div class="wall-v mono green">{fmtUsd(buyUsd)}</div>
+	<div class="wall-kick mono green">BUY WALL · {TF_LABEL[tf]}</div>
+	<div class="wall-v mono green">{fmtUsd(win.buyVol)}</div>
+	<div class="wall-sub mono dim">TAPE {fmtUsd(buyUsd)}</div>
 </div>
 
 <!-- ORDER BOOK DEPTH (bottom-left) -->
@@ -275,6 +311,7 @@
 	<div class="feed-rows">
 		{#each feed as f (f.id)}
 			<div class="feed-row" class:big={f.big} class:buy={f.side === 'buy'} class:sell={f.side === 'sell'}>
+				<span class="feed-stamp mono dim">{f.stamp}</span>
 				<span class="feed-text mono">{f.text}</span>
 				{#if f.amt}<span class="feed-amt mono">{f.amt}</span>{/if}
 			</div>
@@ -347,7 +384,15 @@
 	.tally { display: flex; gap: 6px; padding: 10px 12px; font-size: 12px; font-weight: 700; }
 	.icon-btn { padding: 9px 12px; cursor: pointer; border: 1px solid var(--line); font-size: 14px; color: var(--text); }
 
+	.tf-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; pointer-events: auto; }
+	.tf-toggle { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(8,10,8,0.55); border: 1px solid var(--line); backdrop-filter: blur(10px); }
+	.tf-btn { padding: 6px 13px; border-radius: 7px; border: none; background: none; cursor: pointer; font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: 0.06em; transition: all 0.15s; }
+	.tf-btn:hover { color: var(--text); }
+	.tf-btn.on { background: rgba(20,241,149,0.18); color: var(--green); }
+	.chip { padding: 6px 11px; border-radius: 8px; background: rgba(8,10,8,0.55); border: 1px solid var(--line); font-size: 10px; letter-spacing: 0.04em; color: var(--text); backdrop-filter: blur(10px); }
+
 	.wall { position: fixed; top: 92px; z-index: 10; }
+	.wall-sub { font-size: 9px; letter-spacing: 0.08em; margin-top: 2px; }
 	.wall.left { left: 22px; text-align: left; }
 	.wall.right { right: 22px; text-align: right; }
 	.wall-kick { font-size: 10px; letter-spacing: 0.2em; opacity: 0.8; }
@@ -370,7 +415,8 @@
 	.feed-row.buy { border-left-color: var(--green); }
 	.feed-row.sell { border-left-color: var(--crimson); }
 	.feed-row.big { box-shadow: 0 0 18px rgba(20,241,149,0.16); }
-	.feed-text { font-size: 10px; color: var(--text); letter-spacing: 0.02em; }
+	.feed-stamp { font-size: 8px; letter-spacing: 0.03em; flex-shrink: 0; }
+	.feed-text { font-size: 10px; color: var(--text); letter-spacing: 0.02em; flex: 1; }
 	.feed-row.buy .feed-text { color: #9affc4; } .feed-row.sell .feed-text { color: #ffb0b8; }
 	.feed-amt { font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
 

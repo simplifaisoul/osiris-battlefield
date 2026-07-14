@@ -43,6 +43,7 @@ type Unit = {
 	tracked: boolean; legend: boolean; melee: boolean;
 	// duel state
 	target: Unit | null; retarget: number; atkCd: number; strike: number; face: number;
+	tint: number; struck: number;
 };
 
 // per-class attack pacing (seconds between strikes)
@@ -122,9 +123,16 @@ function chunkyBase(p: Palette): THREE.BufferGeometry[] {
 	const body = paint(new THREE.CylinderGeometry(0.34, 0.42, 0.72, 10), p.cloth); body.translate(0, 0.62, 0);
 	// belt
 	const belt = paint(new THREE.CylinderGeometry(0.43, 0.43, 0.12, 10), p.leather); belt.translate(0, 0.32, 0);
+	// stubby legs connecting boots to body
+	const g1 = paint(new THREE.CylinderGeometry(0.13, 0.12, 0.32, 6), p.clothDark); g1.translate(-0.14, 0.35, 0.02);
+	const g2 = paint(new THREE.CylinderGeometry(0.13, 0.12, 0.32, 6), p.clothDark); g2.translate(0.14, 0.35, 0.02);
 	// big head
 	const head = paint(new THREE.SphereGeometry(0.4, 12, 10), p.skin); head.translate(0, 1.32, 0.02);
-	parts.push(b1, b2, body, belt, head);
+	// simple face — brow + two eyes
+	const brow = paint(new THREE.BoxGeometry(0.34, 0.07, 0.06), p.clothDark); brow.translate(0, 1.46, 0.36);
+	const e1 = paint(new THREE.SphereGeometry(0.062, 6, 5), '#20160f'); e1.translate(-0.15, 1.37, 0.35);
+	const e2 = paint(new THREE.SphereGeometry(0.062, 6, 5), '#20160f'); e2.translate(0.15, 1.37, 0.35);
+	parts.push(b1, b2, g1, g2, body, belt, head, brow, e1, e2);
 	return parts;
 }
 function armPair(p: Palette, weaponSide = 1): THREE.BufferGeometry[] {
@@ -260,6 +268,9 @@ export class Battle {
 	private focus = false; private trackWallet: string | null = null;
 	private shake = 0; private statTick = 0; private fpsAvg = 60;
 	private timeScale = 1; private slowmo = 0; private momentum = 0;
+	private reinB = 0; private reinS = 0; private accB = 0; private accS = 0;
+	private decals!: THREE.InstancedMesh; private DECAL_N = 200; private decalHead = 0;
+	private decalLife!: Float32Array; private decalBase!: Float32Array; private decalX!: Float32Array; private decalZ!: Float32Array;
 
 	private commanders = new Map<string, { kills: number; tier: string; team: Team; usd: number }>();
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
@@ -307,10 +318,12 @@ export class Battle {
 		this.capitalBear = this.buildCapital('bear', CAP);
 		this.frontLine = this.buildFrontLine();
 		this.buildGroundText();
+		this.buildMcapSign();
 		this.buildArmies();
 		this.buildArrows();
 		this.buildSparks();
 		this.buildSouls();
+		this.buildDecals();
 		this.buildAuras();
 
 		this._resize = this.resize.bind(this);
@@ -378,6 +391,12 @@ export class Battle {
 			// patchy tone variation for a hand-painted feel
 			const patch = noise2D(px * 0.11, py * 0.11) * 0.5 + 0.5;
 			c.multiplyScalar(0.88 + patch * 0.24);
+			// MARKET-CAP CONTOURS: topographic bands up the hill mark the mcap "altitude"
+			if (Math.abs(px) < CAP + 6 && zTaper > 0.3) {
+				const band = h / 0.85; // ~0.85 units per contour line
+				const line = Math.abs(band - Math.round(band));
+				if (line < 0.09) c.lerp(new THREE.Color('#fff4d0'), (1 - line / 0.09) * 0.5 * zTaper);
+			}
 			const seam = Math.max(0, 1 - Math.abs(px) / 4);
 			c.lerp(road, seam * 0.75 * zTaper);
 			colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
@@ -475,6 +494,38 @@ export class Battle {
 		this.scene.add(mesh);
 		this.setPriceLabel('$OSIRIS', '');
 	}
+	private mcapSprite!: THREE.Sprite;
+	private mcapCanvas!: HTMLCanvasElement;
+	private mcapTex!: THREE.CanvasTexture;
+	private buildMcapSign() {
+		const c = document.createElement('canvas'); c.width = 512; c.height = 200; this.mcapCanvas = c;
+		this.mcapTex = new THREE.CanvasTexture(c);
+		this.mcapSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.mcapTex, transparent: true, depthTest: false }));
+		this.mcapSprite.scale.set(18, 7, 1);
+		this.mcapSprite.renderOrder = 999;
+		this.scene.add(this.mcapSprite);
+		this.setMarketCap('—', 0);
+	}
+	setMarketCap(value: string, dir: number) {
+		if (!this.mcapCanvas) return;
+		const x = this.mcapCanvas.getContext('2d')!;
+		x.clearRect(0, 0, 512, 200);
+		const up = dir >= 0;
+		const col = up ? '#2fe07a' : '#ff5560';
+		// pill background
+		x.fillStyle = 'rgba(10,14,12,0.82)';
+		const rr = (px: number, py: number, w: number, h: number, r: number) => { x.beginPath(); x.moveTo(px + r, py); x.arcTo(px + w, py, px + w, py + h, r); x.arcTo(px + w, py + h, px, py + h, r); x.arcTo(px, py + h, px, py, r); x.arcTo(px, py, px + w, py, r); x.closePath(); };
+		rr(16, 40, 480, 120, 26); x.fill(); x.lineWidth = 5; x.strokeStyle = col; x.stroke();
+		x.textAlign = 'center'; x.textBaseline = 'middle';
+		x.font = '700 26px "JetBrains Mono", monospace'; x.fillStyle = 'rgba(255,255,255,0.55)';
+		x.fillText('MARKET CAP', 256, 68);
+		x.font = '800 62px "JetBrains Mono", monospace'; x.fillStyle = '#fff';
+		x.fillText(value, 236, 122);
+		// direction arrow
+		x.fillStyle = col; x.font = '800 60px system-ui, sans-serif';
+		x.fillText(up ? '▲' : '▼', 236 + x.measureText(value).width / 2 + 44, 122);
+		this.mcapTex.needsUpdate = true;
+	}
 	setPriceLabel(price: string, sub: string) {
 		if (!this.priceCanvas) return;
 		const x = this.priceCanvas.getContext('2d')!;
@@ -528,6 +579,38 @@ export class Battle {
 		this.souls.frustumCulled = false; this.scene.add(this.souls);
 	}
 
+	private buildDecals() {
+		// battle scars where warriors fall — fade out by shrinking
+		const geo = new THREE.CircleGeometry(0.85, 10); geo.rotateX(-Math.PI / 2);
+		this.decals = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x2b1d10, transparent: true, opacity: 0.34, depthWrite: false }), this.DECAL_N);
+		this.decals.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.decals.count = this.DECAL_N; this.decals.frustumCulled = false;
+		this.decalLife = new Float32Array(this.DECAL_N); this.decalBase = new Float32Array(this.DECAL_N);
+		this.decalX = new Float32Array(this.DECAL_N); this.decalZ = new Float32Array(this.DECAL_N);
+		this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
+		for (let i = 0; i < this.DECAL_N; i++) this.decals.setMatrixAt(i, this.dummy.matrix);
+		this.scene.add(this.decals);
+	}
+	private addDecal(x: number, z: number, s: number) {
+		const i = this.decalHead; this.decalHead = (this.decalHead + 1) % this.DECAL_N;
+		this.decalLife[i] = 26; this.decalBase[i] = s * (0.9 + Math.random() * 0.7);
+		this.decalX[i] = x; this.decalZ[i] = z;
+	}
+	private updateDecals(dt: number) {
+		let dirty = false;
+		for (let i = 0; i < this.DECAL_N; i++) {
+			if (this.decalLife[i] <= 0) continue;
+			this.decalLife[i] -= dt;
+			const k = THREE.MathUtils.clamp(this.decalLife[i] / 26, 0, 1);
+			this.dummy.position.set(this.decalX[i], hillY(this.decalX[i]) + 0.03 + (i % 9) * 0.0022, this.decalZ[i]);
+			this.dummy.rotation.set(0, (i * 0.7) % Math.PI, 0);
+			this.dummy.scale.setScalar(this.decalBase[i] * Math.sqrt(k));
+			this.dummy.updateMatrix();
+			this.decals.setMatrixAt(i, this.dummy.matrix);
+			dirty = true;
+		}
+		if (dirty) this.decals.instanceMatrix.needsUpdate = true;
+	}
+
 	private buildAuras() {
 		const runeGeo = new THREE.RingGeometry(1.05, 1.3, 40), rune2Geo = new THREE.RingGeometry(1.55, 1.68, 40), crownGeo = new THREE.OctahedronGeometry(0.22, 0);
 		for (let i = 0; i < 12; i++) {
@@ -558,6 +641,8 @@ export class Battle {
 
 	setSupply(_s: number) {}
 	setMomentum(m: number) { this.momentum = m; }
+	// continuous garrison reinforcements/sec per side — scales with the selected timeframe's txn rate
+	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
 	resetCamera() { this.manualUntil = 0; this.camPitch = 0.62; this.camZoom = 1; this.panX = 0; this.panZ = 0; }
@@ -601,7 +686,8 @@ export class Battle {
 			bob: Math.random() * Math.PI * 2, age: 0, cd: Math.random() * 1.5, kills: 0, idx, dying: 0,
 			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false,
 			target: null, retarget: Math.random() * 0.4, atkCd: Math.random() * 0.8, strike: 0,
-			face: sign < 0 ? Math.PI / 2 : -Math.PI / 2
+			face: sign < 0 ? Math.PI / 2 : -Math.PI / 2,
+			tint: 0.92 + Math.random() * 0.16, struck: 0
 		});
 	}
 
@@ -651,7 +737,7 @@ export class Battle {
 				this.spawnBurst(p.x, hillY(p.x) + 0.6, p.z, p.team === 'bull' ? GOLD : CRIMSON, 4);
 				let best: Unit | null = null, bd = 9;
 				for (const e of this.units) { if (e.team === p.team || e.dying > 0) continue; const dx = e.x - p.x, dz = e.z - p.z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = e; } }
-				if (best) { best.hp -= p.dmg; if (best.hp <= 0) this.kill(best, []); }
+				if (best) { best.hp -= p.dmg; best.struck = 0.16; if (best.hp <= 0) this.kill(best, []); }
 				this.dummy.scale.setScalar(0); this.dummy.updateMatrix(); this.arrowMesh.setMatrixAt(i, this.dummy.matrix); dirty = true;
 				continue;
 			}
@@ -680,6 +766,7 @@ export class Battle {
 		this.step(simDt);
 		this.updateArrows(simDt);
 		this.updateParticles(simDt);
+		this.updateDecals(simDt);
 		this.render(dt);
 
 		this.statTick += dt; if (this.statTick > 0.2) { this.statTick = 0; this.emitStats(); }
@@ -705,6 +792,11 @@ export class Battle {
 		const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.72 + bias, -FRONT_MAX, FRONT_MAX);
 		this.frontX += (target - this.frontX) * Math.min(1, dt * 0.6);
 
+		// timeframe-driven reinforcements keep the war supplied
+		this.accB += this.reinB * dt; this.accS += this.reinS * dt;
+		while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
+		while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
+
 		// live rosters for target acquisition
 		const bullsAlive: Unit[] = [], bearsAlive: Unit[] = [];
 		for (const u of this.units) if (u.dying <= 0) (u.team === 'bull' ? bullsAlive : bearsAlive).push(u);
@@ -725,6 +817,7 @@ export class Battle {
 			u.age += dt;
 			u.rank = Math.max(0, u.rank - dt * 1.5); u.bob += dt * 9;
 			u.strike = Math.max(0, u.strike - dt);
+			u.struck = Math.max(0, u.struck - dt);
 			u.atkCd -= dt;
 			u.retarget -= dt;
 
@@ -768,7 +861,7 @@ export class Battle {
 						// knockback
 						const kb = u.cls === 'colossus' ? 0.9 : 0.3;
 						t.x += (dx / Math.max(0.01, dist)) * kb; t.z += (dz / Math.max(0.01, dist)) * kb * 0.4;
-						t.hp -= per;
+						t.hp -= per; t.struck = 0.16;
 						if (t.hp <= 0) this.kill(t, [u]);
 						// colossus slam splashes nearby enemies
 						if (u.cls === 'colossus') {
@@ -777,7 +870,7 @@ export class Battle {
 							for (const e of foes) {
 								if (e === t || e.dying > 0 || e.hp <= 0) continue;
 								const ex = e.x - t.x, ez = e.z - t.z;
-								if (ex * ex + ez * ez < 2.4 * 2.4) { e.hp -= per * 0.55; if (e.hp <= 0) this.kill(e, [u]); if (++hits >= 3) break; }
+								if (ex * ex + ez * ez < 2.4 * 2.4) { e.hp -= per * 0.55; e.struck = 0.16; if (e.hp <= 0) this.kill(e, [u]); if (++hits >= 3) break; }
 							}
 							this.shake = Math.min(1.2, this.shake + 0.12);
 						}
@@ -834,6 +927,8 @@ export class Battle {
 
 		this.frontLine.position.x = this.frontX; this.frontLine.position.y = hillY(this.frontX) + 0.12;
 		(this.frontLine.material as THREE.MeshBasicMaterial).opacity = 0.2 + Math.sin(this.time * 5) * 0.07;
+		// the market-cap marker rides the front line (its altitude on the hill)
+		this.mcapSprite.position.set(this.frontX, hillY(this.frontX) + 11 + Math.sin(this.time * 1.5) * 0.4, 0);
 
 		this._bullPower = bullPower; this._bearPower = bearPower; this._bullCount = bullCount; this._bearCount = bearCount; this._bullComp = bc; this._bearComp = rc;
 	}
@@ -842,6 +937,7 @@ export class Battle {
 		u.dying = 0.6;
 		this.spawnBurst(u.x, hillY(u.x) + 1.2, u.z, u.team === 'bull' ? GOLD : CRIMSON, u.legend ? 40 : 9);
 		this.spawnSoul(u.x, hillY(u.x) + 1.6, u.z, u.team === 'bull' ? GOLD : CRIMSON);
+		this.addDecal(u.x, u.z, u.scale);
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;
 		this.totalKills++;
 		if (killers.length) { const killer = killers[(Math.random() * killers.length) | 0]; killer.kills++; if (killer.wallet) { const c = this.commanders.get(killer.wallet); if (c) c.kills++; } }
@@ -892,7 +988,10 @@ export class Battle {
 				d.rotation.set(0.1, u.face, gait * 0.14);
 			}
 			d.updateMatrix(); mesh.setMatrixAt(u.idx, d.matrix); dirty.add(mesh);
-			if (u.tracked) { mesh.setColorAt(u.idx, this.tmpColor.set(1.6, 1.5, 1.1)); }
+			// colour: hit-flash > tracked glow > base tint
+			if (u.struck > 0) mesh.setColorAt(u.idx, this.tmpColor.set(2.4, 2.2, 2.0));
+			else if (u.tracked) mesh.setColorAt(u.idx, this.tmpColor.set(1.6, 1.5, 1.1));
+			else mesh.setColorAt(u.idx, this.tmpColor.setScalar(u.tint));
 		}
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i]; if (u.dying > 0 || u.hp > 0) continue;
