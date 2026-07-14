@@ -58,6 +58,10 @@ const MAX = 340;
 const FRONT_MAX = 33;
 const CAP = FRONT_MAX + 17;
 const ARENA_Z = 36;
+// the battlefield is a bounded board floating in a dark void
+const BOARD_W = 128;
+const BOARD_D = 98;
+const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 11;
 const UNIT_SCALE = 1.9;
@@ -74,7 +78,7 @@ const GOLD = new THREE.Color('#2fd66b');
 const CRIMSON = new THREE.Color('#ff5560');
 
 // The battlefield is a hill whose summit is the market cap.
-const HILL_H = 6;
+const HILL_H = 1.1; // gentle rolling terrain — the war map is near-flat, not a peak
 const HILL_SIG = FRONT_MAX * 0.85;
 function hillY(x: number): number { return HILL_H * Math.exp(-(x * x) / (2 * HILL_SIG * HILL_SIG)); }
 // ground height a unit stands on — matches the terrain's z-taper so nothing floats at the rim
@@ -243,7 +247,7 @@ function skyTexture(): THREE.Texture {
 	const c = document.createElement('canvas'); c.width = 4; c.height = 256;
 	const x = c.getContext('2d')!;
 	const g = x.createLinearGradient(0, 0, 0, 256);
-	g.addColorStop(0, '#2e5f96'); g.addColorStop(0.5, '#7fb0d6'); g.addColorStop(0.8, '#e9d9a8'); g.addColorStop(1, '#d9b877');
+	g.addColorStop(0, '#04060a'); g.addColorStop(0.55, '#080d10'); g.addColorStop(0.85, '#0c1512'); g.addColorStop(1, '#0f1a14');
 	x.fillStyle = g; x.fillRect(0, 0, 4, 256); return new THREE.CanvasTexture(c);
 }
 function radialTexture(hex: string): THREE.Texture {
@@ -277,6 +281,12 @@ export class Battle {
 	private focus = false; private trackWallet: string | null = null;
 	private shake = 0; private statTick = 0; private fpsAvg = 60;
 	private timeScale = 1; private slowmo = 0; private momentum = 0;
+	// war campaign: front advances to a base → theater falls → resets with the newer mcap
+	private phase: 'battle' | 'victory' = 'battle';
+	private winner: Team | null = null;
+	private campaign = 1;
+	private wonUntil = 0;
+	onCampaign: ((r: { winner: Team; campaign: number }) => void) | null = null;
 	private reinB = 0; private reinS = 0; private accB = 0; private accS = 0;
 	private killFx: { x: number; z: number; team: Team; until: number }[] = [];
 	private decals!: THREE.InstancedMesh; private DECAL_N = 200; private decalHead = 0;
@@ -286,7 +296,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.5; private camPitch = 0.52; private camZoom = 0.8;
+	private camYaw = 0.06; private camPitch = 0.78; private camZoom = 1.18;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
@@ -314,7 +324,7 @@ export class Battle {
 		this.renderer.toneMapping = THREE.NoToneMapping;
 
 		this.scene.background = skyTexture();
-		this.scene.fog = new THREE.FogExp2(0xaec7d4, 0.0028);
+		this.scene.fog = new THREE.FogExp2(0x06090b, 0.0042);
 
 		this.camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 700);
 		this.camera.position.set(0, 40, 60);
@@ -351,12 +361,12 @@ export class Battle {
 		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: THREE.HalfFloatType });
 		this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-		const godRays = new GodRaysEffect(this.camera, sun, { density: 0.9, decay: 0.92, weight: 0.2, exposure: 0.26, samples: 32, clampMax: 1, kernelSize: KernelSize.MEDIUM, blur: true, resolutionScale: 0.5 });
-		const bloom = new BloomEffect({ intensity: 0.45, luminanceThreshold: 0.78, luminanceSmoothing: 0.3, mipmapBlur: true, radius: 0.7, kernelSize: KernelSize.HUGE });
+		const godRays = new GodRaysEffect(this.camera, sun, { density: 0.9, decay: 0.92, weight: 0.12, exposure: 0.2, samples: 32, clampMax: 1, kernelSize: KernelSize.MEDIUM, blur: true, resolutionScale: 0.5 });
+		const bloom = new BloomEffect({ intensity: 0.55, luminanceThreshold: 0.72, luminanceSmoothing: 0.3, mipmapBlur: true, radius: 0.7, kernelSize: KernelSize.HUGE });
 		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-		const bc = new BrightnessContrastEffect({ brightness: 0.02, contrast: 0.22 });
-		const hs = new HueSaturationEffect({ saturation: 0.16 });
-		const vignette = new VignetteEffect({ offset: 0.32, darkness: 0.44 });
+		const bc = new BrightnessContrastEffect({ brightness: -0.015, contrast: 0.18 });
+		const hs = new HueSaturationEffect({ saturation: 0.06 });
+		const vignette = new VignetteEffect({ offset: 0.26, darkness: 0.64 });
 		const ca = new ChromaticAberrationEffect({ offset: new THREE.Vector2(0.0005, 0.0005), radialModulation: true, modulationOffset: 0.5 });
 		const noise = new NoiseEffect({ blendFunction: BlendFunction.SOFT_LIGHT });
 		(noise as unknown as { blendMode: { opacity: { value: number } } }).blendMode.opacity.value = 0.14;
@@ -370,8 +380,8 @@ export class Battle {
 	}
 
 	private buildLights() {
-		this.scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x4a5c2e, 1.05));
-		const sun = new THREE.DirectionalLight(0xfff2d9, 2.5);
+		this.scene.add(new THREE.HemisphereLight(0x8fb0d0, 0x2c3520, 0.8));
+		const sun = new THREE.DirectionalLight(0xffeccc, 2.15);
 		sun.position.set(-34, 62, 26); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
 		const s = 78; sun.shadow.camera.left = -s; sun.shadow.camera.right = s; sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s; sun.shadow.camera.far = 190; sun.shadow.bias = -0.0004;
 		this.scene.add(sun);
@@ -379,86 +389,95 @@ export class Battle {
 
 	private buildGround() {
 		const mat = new THREE.MeshToonMaterial({ map: groundTexture(), vertexColors: true, gradientMap: (toonMaterial() as THREE.MeshToonMaterial).gradientMap });
-		const geo = new THREE.PlaneGeometry(420, 260, 240, 150);
+		const geo = new THREE.PlaneGeometry(BOARD_W, BOARD_D, 210, 160);
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
 		const colors = new Float32Array(pos.count * 3);
-		// vibrant held territory: bull grass vs bear scorch, sandy road at the seam
-		const bullSoil = new THREE.Color('#6ea23e'), bearSoil = new THREE.Color('#96452c'), road = new THREE.Color('#d9cda6');
+		// moody war-map palette: bull grass vs bear dust, asphalt road, price gridlines
+		const bullSoil = new THREE.Color('#4c7a2c'), bearSoil = new THREE.Color('#6e5230');
+		const asphalt = new THREE.Color('#3c3c38'), dash = new THREE.Color('#d8d8d0'), grid = new THREE.Color('#e9e2c2');
 		const c = new THREE.Color();
-		const heights = new Map<string, number>();
 		for (let i = 0; i < pos.count; i++) {
 			const px = pos.getX(i), py = pos.getY(i);
-			const outX = Math.max(0, Math.abs(px) - (CAP + 10)), outZ = Math.max(0, Math.abs(py) - (ARENA_Z + 12));
-			const falloff = THREE.MathUtils.clamp((outX + outZ) / 46, 0, 1);
-			const dune = (noise2D(px * 0.018, py * 0.018) * 5 + noise2D(px * 0.05, py * 0.05) * 1.6) * falloff;
 			const zTaper = THREE.MathUtils.clamp(1 - (Math.abs(py) - ARENA_Z) / 14, 0, 1);
-			const h = dune + hillY(px) * zTaper;
+			const h = hillY(px) * zTaper + noise2D(px * 0.05, py * 0.05) * 0.35;
 			pos.setZ(i, h);
-			heights.set(`${Math.round(px)},${Math.round(py)}`, h);
-			const t = THREE.MathUtils.clamp((px + 6) / 12, 0, 1);
+			// held territory split with a soft, noisy seam
+			const wob = noise2D(0.5, py * 0.06) * 3;
+			const t = THREE.MathUtils.clamp((px + wob + 5) / 10, 0, 1);
 			c.copy(bullSoil).lerp(bearSoil, t);
-			// patchy tone variation for a hand-painted feel
-			const patch = noise2D(px * 0.11, py * 0.11) * 0.5 + 0.5;
-			c.multiplyScalar(0.88 + patch * 0.24);
-			// MARKET-CAP CONTOURS: topographic bands up the hill mark the mcap "altitude"
-			if (Math.abs(px) < CAP + 6 && zTaper > 0.3) {
-				const band = h / 0.85; // ~0.85 units per contour line
-				const line = Math.abs(band - Math.round(band));
-				if (line < 0.09) c.lerp(new THREE.Color('#fff4d0'), (1 - line / 0.09) * 0.5 * zTaper);
+			// hand-painted patches + mow stripes
+			const patch = noise2D(px * 0.1, py * 0.1) * 0.5 + 0.5;
+			c.multiplyScalar(0.85 + patch * 0.3);
+			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.05);
+			// PRICE GRIDLINES: vertical ticks every 10 units — the terrain IS the mcap axis
+			const nearGrid = Math.abs(px - Math.round(px / 10) * 10);
+			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 40) c.lerp(grid, 0.32);
+			// horizontal ROAD across the whole map
+			const roadDist = Math.abs(py - ROAD_Z);
+			if (roadDist < 2.1) {
+				c.lerp(asphalt, THREE.MathUtils.clamp(1 - (roadDist - 1.4) / 0.7, 0, 1));
+				// centre dashes
+				if (roadDist < 0.22 && ((px % 7) + 7) % 7 < 3) c.copy(dash);
 			}
-			const seam = Math.max(0, 1 - Math.abs(px) / 4);
-			c.lerp(road, seam * 0.75 * zTaper);
 			colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
 		}
 		this.terrainH = (x, z) => {
-			const outX = Math.max(0, Math.abs(x) - (CAP + 10)), outZ = Math.max(0, Math.abs(z) - (ARENA_Z + 12));
-			const falloff = THREE.MathUtils.clamp((outX + outZ) / 46, 0, 1);
-			const dune = (noise2D(x * 0.018, z * 0.018) * 5 + noise2D(x * 0.05, z * 0.05) * 1.6) * falloff;
 			const zTaper = THREE.MathUtils.clamp(1 - (Math.abs(z) - ARENA_Z) / 14, 0, 1);
-			return dune + hillY(x) * zTaper;
+			return hillY(x) * zTaper;
 		};
 		geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 		geo.computeVertexNormals();
 		const g = new THREE.Mesh(geo, mat); g.rotation.x = -Math.PI / 2; g.receiveShadow = true; this.scene.add(g);
+		// dark board skirt so the map reads as a diorama floating in the void
+		const skirt = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, 3.4, BOARD_D), new THREE.MeshBasicMaterial({ color: 0x0a0d0a }));
+		skirt.position.y = -1.75; this.scene.add(skirt);
 	}
 
 	private buildProps() {
-		// stylised trees + rocks scattered around the arena rim
 		const parts: THREE.BufferGeometry[] = [];
 		const rng = (a: number, b: number) => a + Math.random() * (b - a);
+		const onRoad = (z: number) => Math.abs(z - ROAD_Z) < 3.4;
 		const treeAt = (x: number, z: number, s: number, green: string) => {
 			const y = this.terrainH(x, z);
-			const trunk = paint(new THREE.CylinderGeometry(0.16 * s, 0.22 * s, 0.9 * s, 6), '#7a4c26'); trunk.translate(x, y + 0.45 * s, z);
-			const c1 = paint(new THREE.ConeGeometry(1.1 * s, 1.5 * s, 8), green); c1.translate(x, y + 1.6 * s, z);
-			const c2 = paint(new THREE.ConeGeometry(0.85 * s, 1.2 * s, 8), green); c2.translate(x, y + 2.35 * s, z);
+			const trunk = paint(new THREE.CylinderGeometry(0.14 * s, 0.2 * s, 0.8 * s, 6), '#5f3d1f'); trunk.translate(x, y + 0.4 * s, z);
+			const c1 = paint(new THREE.ConeGeometry(0.95 * s, 1.4 * s, 8), green); c1.translate(x, y + 1.45 * s, z);
+			const c2 = paint(new THREE.ConeGeometry(0.72 * s, 1.1 * s, 8), green); c2.translate(x, y + 2.15 * s, z);
 			parts.push(trunk, c1, c2);
 		};
-		const rockAt = (x: number, z: number, s: number) => {
-			const y = this.terrainH(x, z);
-			const r = paint(new THREE.BoxGeometry(0.9 * s, 0.7 * s, 0.8 * s), '#9aa0a8');
-			r.rotateY(Math.random() * 3); r.rotateZ((Math.random() - 0.5) * 0.4); r.translate(x, y + 0.25 * s, z);
-			const r2 = paint(new THREE.BoxGeometry(0.5 * s, 0.45 * s, 0.5 * s), '#b4bac2');
-			r2.rotateY(Math.random() * 3); r2.translate(x + 0.4 * s, y + 0.18 * s, z + 0.2 * s);
-			parts.push(r, r2);
-		};
-		for (let i = 0; i < 46; i++) {
-			const side = Math.random() < 0.5 ? -1 : 1;
-			const x = rng(-CAP - 4, CAP + 4) + (Math.random() < 0.4 ? side * rng(CAP + 6, CAP + 30) : 0);
-			const z = Math.abs(x) > CAP + 4 ? rng(-ARENA_Z - 8, ARENA_Z + 8) : side * rng(ARENA_Z + 6, ARENA_Z + 34);
-			const green = Math.random() < 0.5 ? '#3e8c3a' : '#5aa832';
-			treeAt(x, z, rng(0.8, 1.7), green);
-		}
-		for (let i = 0; i < 18; i++) {
-			const side = Math.random() < 0.5 ? -1 : 1;
-			const x = rng(-CAP - 20, CAP + 20);
-			const z = side * rng(ARENA_Z + 5, ARENA_Z + 30);
-			rockAt(x, z, rng(0.6, 1.6));
+		// dense forests across BOTH territories — clear of the road and the fighting lane
+		for (let i = 0; i < 150; i++) {
+			const x = rng(-BOARD_W / 2 + 6, BOARD_W / 2 - 6);
+			const z = rng(-BOARD_D / 2 + 6, BOARD_D / 2 - 6);
+			if (onRoad(z)) continue;
+			if (Math.abs(x) < CAP - 6 && Math.abs(z) < ARENA_Z - 4 && Math.random() < 0.82) continue;
+			const bull = x < 0;
+			const green = bull ? (Math.random() < 0.5 ? '#2f6e2c' : '#3f8a34') : (Math.random() < 0.5 ? '#5c6e2a' : '#726b2c');
+			treeAt(x, z, rng(0.7, 1.5), green);
 		}
 		const merged = mergeGeometries(parts, false)!; merged.computeVertexNormals();
-		const mesh = new THREE.Mesh(merged, toonMaterial());
-		mesh.castShadow = true; mesh.receiveShadow = true;
-		this.scene.add(mesh);
+		const mesh = new THREE.Mesh(merged, toonMaterial()); mesh.castShadow = true; mesh.receiveShadow = true; this.scene.add(mesh);
+
+		// lakes — flat translucent pools, one deep in each territory
+		const lakeMat = new THREE.MeshBasicMaterial({ color: 0x2f7fb8, transparent: true, opacity: 0.72 });
+		for (const [lx, lz, r] of [[-34, -26, 8], [40, 28, 9]] as const) {
+			const lake = new THREE.Mesh(new THREE.CircleGeometry(r, 24), lakeMat);
+			lake.rotation.x = -Math.PI / 2; lake.scale.y = 0.6; lake.position.set(lx, this.terrainH(lx, lz) + 0.12, lz);
+			this.scene.add(lake);
+		}
+
+		// villages — clusters of toon houses in the back corners
+		const vparts: THREE.BufferGeometry[] = [];
+		const houseAt = (x: number, z: number, wall: string) => {
+			const y = this.terrainH(x, z);
+			const base = paint(new THREE.BoxGeometry(1.6, 1.1, 1.4), wall); base.translate(x, y + 0.55, z);
+			const roof = paint(new THREE.ConeGeometry(1.35, 0.9, 4), '#7a3b28'); roof.rotateY(Math.PI / 4); roof.translate(x, y + 1.55, z);
+			vparts.push(base, roof);
+		};
+		for (const [vx, vz] of [[-48, 34], [48, -34], [-54, -28], [52, 30]] as const)
+			for (let k = 0; k < 4; k++) houseAt(vx + rng(-4, 4), vz + rng(-4, 4), Math.random() < 0.5 ? '#d8c9a8' : '#c2a888');
+		const vm = mergeGeometries(vparts, false)!; vm.computeVertexNormals();
+		const vmesh = new THREE.Mesh(vm, toonMaterial()); vmesh.castShadow = true; this.scene.add(vmesh);
 	}
 
 	private buildCapital(team: Team, x: number): THREE.Group {
@@ -669,7 +688,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camPitch = 0.52; this.camZoom = 0.8; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.78; this.camZoom = 1.18; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -863,16 +882,25 @@ export class Battle {
 			else { bearCount++; rc[u.cls]++; if (!u.ranged) bearPower += u.dmg; }
 		}
 
-		const tot = bullPower + bearPower;
-		const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
-		const bias = THREE.MathUtils.clamp(this.momentum / 25, -1, 1) * FRONT_MAX * 0.35;
-		const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.72 + bias, -FRONT_MAX, FRONT_MAX);
-		this.frontX += (target - this.frontX) * Math.min(1, dt * 0.6);
+		if (this.phase === 'battle') {
+			const tot = bullPower + bearPower;
+			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
+			const bias = THREE.MathUtils.clamp(this.momentum / 25, -1, 1) * FRONT_MAX * 0.35;
+			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.72 + bias, -FRONT_MAX, FRONT_MAX);
+			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.6);
+			// a side reaches the enemy base → the theater falls
+			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
+			else if (this.frontX < -FRONT_MAX * 0.9) this.winCampaign('bear');
+		} else if (performance.now() >= this.wonUntil) {
+			this.resetCampaign();
+		}
 
-		// timeframe-driven reinforcements keep the war supplied
-		this.accB += this.reinB * dt; this.accS += this.reinS * dt;
-		while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
-		while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
+		// timeframe-driven reinforcements keep the war supplied (paused while a theater falls)
+		if (this.phase === 'battle') {
+			this.accB += this.reinB * dt; this.accS += this.reinS * dt;
+			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
+			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
+		}
 
 		// live rosters for target acquisition
 		const bullsAlive: Unit[] = [], bearsAlive: Unit[] = [];
@@ -1032,6 +1060,23 @@ export class Battle {
 		this._bullPower = bullPower; this._bearPower = bearPower; this._bullCount = bullCount; this._bearCount = bearCount; this._bullComp = bc; this._bearComp = rc;
 	}
 
+	private winCampaign(team: Team) {
+		this.phase = 'victory'; this.winner = team; this.wonUntil = performance.now() + 4000; this.shake = 1.7;
+		const loser = team === 'bull' ? this.capitalBear : this.capitalBull;
+		// the fallen base erupts
+		this.spawnBurst(loser.position.x, 4, 0, team === 'bull' ? CRIMSON : GOLD, 140);
+		for (let k = 0; k < 6; k++) this.addDecal(loser.position.x + (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, 2.5);
+		this.onCampaign?.({ winner: team, campaign: this.campaign });
+	}
+
+	private resetCampaign() {
+		this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
+		for (const u of this.units) this.armies[`${u.team}:${u.cls}`].mesh.setMatrixAt(u.idx, this.dummy.matrix);
+		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
+		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
+		this.spawnGarrison(this.lastGarrison.bulls, this.lastGarrison.bears);
+	}
+
 	private kill(u: Unit, killers: Unit[]) {
 		if (u.dying > 0) return; // already down — never double-count a casualty
 		u.dying = 8; // fall, lie as a casualty on the field, then fade
@@ -1126,9 +1171,9 @@ export class Battle {
 			this.panX = THREE.MathUtils.clamp(this.panX, -56, 56); this.panZ = THREE.MathUtils.clamp(this.panZ, -44, 44);
 		}
 
-		let target = new THREE.Vector3(this.panX, 3, this.panZ);
-		let radius = 54 * this.camZoom;
-		let height = THREE.MathUtils.lerp(24, 100, this.camPitch) * (0.55 + this.camZoom * 0.45);
+		let target = new THREE.Vector3(this.panX, 1, this.panZ);
+		let radius = 60 * this.camZoom;
+		let height = THREE.MathUtils.lerp(24, 128, this.camPitch) * (0.55 + this.camZoom * 0.45);
 
 		if (this.focus) {
 			const tracked = this.units.find((u) => u.tracked && u.dying <= 0);
@@ -1175,7 +1220,7 @@ export class Battle {
 			bulls: this._bullCount, bears: this._bearCount, bullPower: this._bullPower, bearPower: this._bearPower,
 			frontPct: THREE.MathUtils.clamp(((this.frontX + FRONT_MAX) / (FRONT_MAX * 2)) * 100, 0, 100),
 			casualtiesBull: this.casualtiesBull, casualtiesBear: this.casualtiesBear, fps: Math.round(this.fpsAvg),
-			round: 1, winBull: 0, winBear: 0, phase: 'battle', winner: null,
+			round: this.campaign, winBull: 0, winBear: 0, phase: this.phase, winner: this.winner,
 			totalKills: this.totalKills, biggestWhaleUsd: this.biggestWhaleUsd, biggestWhaleWallet: this.biggestWhaleWallet,
 			commanders, bullComp: this._bullComp, bearComp: this._bearComp
 		});

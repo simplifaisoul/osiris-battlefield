@@ -23,6 +23,8 @@
 	let muted = $state(false);
 	let flashId = $state(0);
 	function doFlash() { flashId++; }
+	let campaignBanner = $state<{ winner: string; campaign: number; mcap: string } | null>(null);
+	let campaignTimer: any;
 
 	let trackInput = $state('');
 	let tracking = $state(false);
@@ -170,6 +172,13 @@
 					audio?.horn(!!e.god); if (e.god) doFlash();
 				}
 			};
+			battle.onCampaign = (r) => {
+				doFlash();
+				audio?.victory(r.winner === 'bull'); audio?.boom();
+				campaignBanner = { winner: r.winner, campaign: r.campaign, mcap: token ? fmtUsd(token.marketCap) : '' };
+				clearTimeout(campaignTimer); campaignTimer = setTimeout(() => (campaignBanner = null), 3800);
+				pushFeed(`${r.winner === 'bull' ? 'BULLS' : 'BEARS'} STORM THE BASE — CAMPAIGN ${r.campaign} FALLS`, r.winner === 'bull' ? 'buy' : 'sell', '', true);
+			};
 			battle.start();
 
 			await loadToken();
@@ -189,7 +198,7 @@
 		return () => { alive = false; };
 	});
 
-	onDestroy(() => { clearInterval(tradeTimer); clearInterval(tokenTimer); clearInterval(clashTimer); clearInterval(clockTimer); clearTimeout(bannerTimer); audio?.dispose(); battle?.dispose(); });
+	onDestroy(() => { clearInterval(tradeTimer); clearInterval(tokenTimer); clearInterval(clashTimer); clearInterval(clockTimer); clearTimeout(bannerTimer); clearTimeout(campaignTimer); audio?.dispose(); battle?.dispose(); });
 </script>
 
 <svelte:head><title>OSIRIS · Market Battlefield</title></svelte:head>
@@ -218,6 +227,14 @@
 </div>
 
 {#key flashId}{#if flashId > 0}<div class="flash"></div>{/if}{/key}
+
+{#if campaignBanner}
+	<div class="campaign" class:bear={campaignBanner.winner === 'bear'}>
+		<div class="camp-sub mono">CAMPAIGN {campaignBanner.campaign} · BASE OVERRUN</div>
+		<div class="camp-title display">{campaignBanner.winner === 'bull' ? 'BULLS STORM THE BASE' : 'BEARS STORM THE BASE'}</div>
+		<div class="camp-mcap mono">NEW FRONT OPENS @ <span class:green={campaignBanner.winner === 'bull'} class:red={campaignBanner.winner === 'bear'}>{campaignBanner.mcap}</span> MARKET CAP</div>
+	</div>
+{/if}
 
 {#if !entered}
 	<div class="intro">
@@ -270,7 +287,8 @@
 		{/if}
 	</div>
 	<div class="top-right">
-		<div class="tally glass mono"><span class="green">{Math.round(stats.frontPct)}%</span><span class="dim">HILL</span><span class="red">{Math.round(100 - stats.frontPct)}%</span></div>
+		<div class="tally glass mono"><span class="dim">CAMPAIGN</span> <span class="gold">{stats.round}</span></div>
+		<div class="tally glass mono"><span class="green">{Math.round(stats.frontPct)}%</span><span class="dim">FRONT</span><span class="red">{Math.round(100 - stats.frontPct)}%</span></div>
 		<button class="icon-btn glass" onclick={toggleSound}>{muted ? '🔇' : '🔊'}</button>
 	</div>
 </header>
@@ -363,6 +381,13 @@
 	.tl-tier { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 8px var(--green), 0 2px 3px #000; }
 	.tl-hp { width: 44px; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.6); margin: 3px auto 0; overflow: hidden; border: 1px solid rgba(20,241,149,0.5); }
 	.tl-hp span { display: block; height: 100%; background: var(--green); }
+
+	.campaign { position: fixed; inset: 0; z-index: 57; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; pointer-events: none; animation: rise 0.4s both; background: radial-gradient(circle at 50% 45%, rgba(20,241,149,0.14), transparent 62%); }
+	.campaign.bear { background: radial-gradient(circle at 50% 45%, rgba(255,77,94,0.16), transparent 62%); }
+	.camp-sub { font-size: 12px; letter-spacing: 0.42em; color: var(--text-2); }
+	.camp-title { font-size: 52px; font-weight: 900; color: #fff; letter-spacing: 0.03em; text-shadow: 0 0 38px rgba(20,241,149,0.55), 0 4px 20px #000; }
+	.campaign.bear .camp-title { text-shadow: 0 0 38px rgba(255,77,94,0.55), 0 4px 20px #000; }
+	.camp-mcap { font-size: 15px; letter-spacing: 0.14em; color: var(--text); }
 
 	.kill-marker { position: absolute; transform: translate(-50%, -100%); font-size: 11px; font-weight: 700; color: #baffd6; letter-spacing: 0.04em; text-shadow: 0 0 8px rgba(20,241,149,0.7), 0 2px 3px #000; white-space: nowrap; }
 	.kill-marker.bear { color: #ffc2c8; text-shadow: 0 0 8px rgba(255,77,94,0.7), 0 2px 3px #000; }
