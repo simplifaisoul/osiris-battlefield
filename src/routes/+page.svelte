@@ -59,7 +59,7 @@
 		if (token) battle?.setMarketCap(fmtUsd(token.marketCap), win.chg);
 		// reinforcement flow scaled from the window's real txn rate
 		const scale = 30; // battle-time amplification
-		const rate = (n: number) => Math.min(1.1, Math.max(0.04, (n / TF_SECS[tf]) * scale));
+		const rate = (n: number) => Math.min(0.55, Math.max(0.03, (n / TF_SECS[tf]) * scale));
 		battle?.setReinforceRates(rate(win.buys), rate(win.sells));
 	}
 	function setTf(next: TF) { tf = next; applyTf(); }
@@ -165,15 +165,15 @@
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
 				if (e.type === 'legend') {
-					const c = e.cls.toUpperCase();
-					pushFeed(`⚡ ${e.tier} ${c} — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
+					const c = e.cls === 'colossus' ? 'TANK' : e.cls.toUpperCase();
+					pushFeed(`⚡ ${e.tier} ${c} ROLLS OUT — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
 					audio?.horn(!!e.god); if (e.god) doFlash();
 				}
 			};
 			battle.start();
 
 			await loadToken();
-			const g = (n: number) => Math.max(20, Math.min(150, Math.round(n)));
+			const g = (n: number) => Math.max(14, Math.min(64, Math.round(n * 0.5)));
 			battle.spawnGarrison(g(token?.buys24h ?? 80), g(token?.sells24h ?? 80));
 			await loadTrades(true);
 			ready = true;
@@ -297,11 +297,11 @@
 <div class="forces glass">
 	<div class="force">
 		<div class="force-head green mono">◤ BULLS · LONGS <span class="force-n">{stats.bulls}</span></div>
-		<div class="force-comp mono"><span>🛡 {stats.bullComp.spear}</span><span>🗡 {stats.bullComp.ronin}</span><span>🏹 {stats.bullComp.archer}</span><span>🐉 {stats.bullComp.colossus}</span></div>
+		<div class="force-comp mono"><span>🛡 {stats.bullComp.spear}</span><span>🗡 {stats.bullComp.ronin}</span><span>🏹 {stats.bullComp.archer}</span><span>💥 {stats.bullComp.colossus} TANKS</span></div>
 	</div>
 	<div class="force">
 		<div class="force-head red mono">BEARS · SHORTS ◥ <span class="force-n">{stats.bears}</span></div>
-		<div class="force-comp mono"><span>🛡 {stats.bearComp.spear}</span><span>🗡 {stats.bearComp.ronin}</span><span>🏹 {stats.bearComp.archer}</span><span>🐉 {stats.bearComp.colossus}</span></div>
+		<div class="force-comp mono"><span>🛡 {stats.bearComp.spear}</span><span>🗡 {stats.bearComp.ronin}</span><span>🏹 {stats.bearComp.archer}</span><span>💥 {stats.bearComp.colossus} TANKS</span></div>
 	</div>
 </div>
 

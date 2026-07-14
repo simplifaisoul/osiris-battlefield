@@ -47,7 +47,7 @@ type Unit = {
 };
 
 // per-class attack pacing (seconds between strikes)
-const ATK_CD: Record<Cls, number> = { spear: 1.05, ronin: 0.62, archer: 1.4, colossus: 2.0 };
+const ATK_CD: Record<Cls, number> = { spear: 1.05, ronin: 0.62, archer: 1.4, colossus: 2.8 };
 const KILL_TEMPO = 2.3; // global lethality multiplier (per-hit = dmg * cd * tempo)
 const ACQUIRE_R = 14; // how far a melee unit will lock onto an enemy
 
@@ -57,14 +57,14 @@ const CAP = FRONT_MAX + 16;
 const ARENA_Z = 26;
 const MELEE = 4.2;
 const SPEED = 11;
-const UNIT_SCALE = 1.15;
+const UNIT_SCALE = 1.9;
 const CLASSES: Cls[] = ['spear', 'ronin', 'archer', 'colossus'];
 
 const CLASS_STATS: Record<Cls, { hpMul: number; dmgMul: number; scaleMul: number; ranged: boolean; standoff: number; speedMul: number }> = {
 	spear: { hpMul: 1.0, dmgMul: 1.0, scaleMul: 1.0, ranged: false, standoff: 0.8, speedMul: 1.0 },
 	ronin: { hpMul: 0.78, dmgMul: 1.9, scaleMul: 0.95, ranged: false, standoff: 0.6, speedMul: 1.4 },
-	archer: { hpMul: 0.55, dmgMul: 1.7, scaleMul: 0.9, ranged: true, standoff: 15, speedMul: 1.05 },
-	colossus: { hpMul: 1.5, dmgMul: 1.4, scaleMul: 1.35, ranged: false, standoff: 0.9, speedMul: 0.8 }
+	archer: { hpMul: 0.55, dmgMul: 1.7, scaleMul: 0.9, ranged: true, standoff: 13, speedMul: 1.05 },
+	colossus: { hpMul: 2.4, dmgMul: 2.4, scaleMul: 1.0, ranged: true, standoff: 10, speedMul: 0.6 }
 };
 
 const GOLD = new THREE.Color('#2fd66b');
@@ -82,8 +82,9 @@ function hash01(s: string): number {
 }
 function pickClass(tier: string, seed: number): Cls {
 	if (tier === 'TITAN' || tier === 'GOD') return 'colossus';
-	if (seed < 0.42) return 'spear';
-	if (seed < 0.70) return 'archer';
+	// ranged-heavy mix: most of the war is volleys traded across the line
+	if (seed < 0.3) return 'spear';
+	if (seed < 0.76) return 'archer';
 	return 'ronin';
 }
 function easeOutBack(t: number): number { const c = 1.70158, c3 = c + 1; return 1 + c3 * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); }
@@ -190,31 +191,27 @@ function buildArcher(p: Palette): THREE.BufferGeometry {
 }
 
 function buildColossus(p: Palette): THREE.BufferGeometry {
+	// WHALE ARMOR: a chunky toon tank — hull, treads, turret, barrel
 	const parts: THREE.BufferGeometry[] = [];
-	// giant boots + legs
-	const b1 = paint(new THREE.BoxGeometry(0.4, 0.32, 0.5), p.metal); b1.translate(-0.28, 0.16, 0.02);
-	const b2 = paint(new THREE.BoxGeometry(0.4, 0.32, 0.5), p.metal); b2.translate(0.28, 0.16, 0.02);
-	// massive torso
-	const body = paint(new THREE.CylinderGeometry(0.52, 0.66, 1.1, 10), p.cloth); body.translate(0, 0.95, 0);
-	const plate = paint(new THREE.BoxGeometry(0.72, 0.55, 0.2), p.accent); plate.translate(0, 1.1, 0.42);
-	// huge pauldrons
-	const s1 = paint(new THREE.SphereGeometry(0.34, 10, 8), p.metal); s1.translate(-0.62, 1.5, 0);
-	const s2 = paint(new THREE.SphereGeometry(0.34, 10, 8), p.metal); s2.translate(0.62, 1.5, 0);
-	// arms + fists
-	const aR = paint(new THREE.CylinderGeometry(0.16, 0.19, 0.7, 8), p.skin); aR.rotateZ(-0.85); aR.translate(0.85, 1.15, 0.06);
-	const fR = paint(new THREE.SphereGeometry(0.22, 8, 6), p.skin); fR.translate(1.1, 0.92, 0.1);
-	const aL = paint(new THREE.CylinderGeometry(0.16, 0.19, 0.7, 8), p.skin); aL.rotateZ(0.85); aL.translate(-0.85, 1.15, 0.06);
-	const fL = paint(new THREE.SphereGeometry(0.22, 8, 6), p.skin); fL.translate(-1.1, 0.92, 0.1);
-	// big head + horned crown helm
-	const head = paint(new THREE.SphereGeometry(0.46, 12, 10), p.skin); head.translate(0, 2.0, 0.02);
-	const helm = paint(new THREE.SphereGeometry(0.5, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), p.accent); helm.translate(0, 2.12, 0.02);
-	const h1 = paint(new THREE.ConeGeometry(0.12, 0.55, 6), p.metal); h1.rotateZ(1.05); h1.translate(-0.55, 2.35, 0.02);
-	const h2 = paint(new THREE.ConeGeometry(0.12, 0.55, 6), p.metal); h2.rotateZ(-1.05); h2.translate(0.55, 2.35, 0.02);
-	// colossal warhammer
-	const haft = paint(new THREE.CylinderGeometry(0.07, 0.07, 2.9, 8), p.wood); haft.translate(1.1, 1.8, 0.1);
-	const hh = paint(new THREE.BoxGeometry(0.72, 0.5, 0.5), p.metal); hh.translate(1.1, 3.2, 0.1);
-	const hb = paint(new THREE.BoxGeometry(0.78, 0.14, 0.56), p.accent); hb.translate(1.1, 3.0, 0.1);
-	parts.push(b1, b2, body, plate, s1, s2, aR, fR, aL, fL, head, helm, h1, h2, haft, hh, hb);
+	// treads
+	const t1 = paint(new THREE.BoxGeometry(2.5, 0.55, 0.55), '#2c2c28'); t1.translate(0, 0.32, -0.85);
+	const t2 = paint(new THREE.BoxGeometry(2.5, 0.55, 0.55), '#2c2c28'); t2.translate(0, 0.32, 0.85);
+	// wheels hint
+	for (let i = -2; i <= 2; i++) {
+		const w1 = paint(new THREE.CylinderGeometry(0.22, 0.22, 0.12, 8), '#4a4a42'); w1.rotateX(Math.PI / 2); w1.translate(i * 0.5, 0.3, -0.85);
+		const w2 = paint(new THREE.CylinderGeometry(0.22, 0.22, 0.12, 8), '#4a4a42'); w2.rotateX(Math.PI / 2); w2.translate(i * 0.5, 0.3, 0.85);
+		parts.push(w1, w2);
+	}
+	// hull
+	const hull = paint(new THREE.BoxGeometry(2.3, 0.62, 1.5), p.cloth); hull.translate(0, 0.78, 0);
+	const glacis = paint(new THREE.BoxGeometry(0.7, 0.4, 1.3), p.clothDark); glacis.rotateZ(0.5); glacis.translate(1.15, 0.85, 0);
+	const trim = paint(new THREE.BoxGeometry(2.35, 0.1, 1.55), p.accent); trim.translate(0, 1.06, 0);
+	// turret + barrel (points +x)
+	const turret = paint(new THREE.CylinderGeometry(0.62, 0.72, 0.55, 10), p.cloth); turret.translate(-0.15, 1.4, 0);
+	const hatch = paint(new THREE.CylinderGeometry(0.24, 0.24, 0.14, 8), p.accent); hatch.translate(-0.3, 1.72, 0);
+	const barrel = paint(new THREE.CylinderGeometry(0.11, 0.13, 1.9, 8), p.metal); barrel.rotateZ(Math.PI / 2); barrel.translate(1.15, 1.42, 0);
+	const muzzle = paint(new THREE.CylinderGeometry(0.17, 0.17, 0.25, 8), '#2c2c28'); muzzle.rotateZ(Math.PI / 2); muzzle.translate(2.05, 1.42, 0);
+	parts.push(t1, t2, hull, glacis, trim, turret, hatch, barrel, muzzle);
 	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
 }
 
@@ -263,6 +260,10 @@ export class Battle {
 	private PROJ = 320;
 	private proj!: { active: boolean; x: number; y: number; z: number; vx: number; vy: number; vz: number; dmg: number; team: Team; life: number }[];
 	private projHead = 0;
+	private shellMesh!: THREE.InstancedMesh;
+	private SHELL_N = 90;
+	private shells!: { active: boolean; x: number; y: number; z: number; vx: number; vy: number; vz: number; dmg: number; team: Team; life: number }[];
+	private shellHead = 0;
 
 	private raf = 0; private last = 0; private time = 0;
 	private focus = false; private trackWallet: string | null = null;
@@ -276,7 +277,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.5; private camPitch = 0.62; private camZoom = 1;
+	private camYaw = 0.5; private camPitch = 0.52; private camZoom = 0.8;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
@@ -562,6 +563,15 @@ export class Battle {
 		for (let i = 0; i < this.PROJ; i++) { this.arrowMesh.setMatrixAt(i, this.dummy.matrix); this.arrowMesh.setColorAt(i, this.tmpColor.set(0xffffff)); }
 		this.scene.add(this.arrowMesh);
 		this.proj = Array.from({ length: this.PROJ }, () => ({ active: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, dmg: 0, team: 'bull' as Team, life: 0 }));
+
+		// tank shells — fat dark rounds with a bright tip
+		const shellGeo = paint(new THREE.CapsuleGeometry(0.16, 0.34, 3, 8), '#26221c');
+		this.shellMesh = new THREE.InstancedMesh(shellGeo, new THREE.MeshBasicMaterial({ vertexColors: true }), this.SHELL_N);
+		this.shellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.shellMesh.count = this.SHELL_N; this.shellMesh.frustumCulled = false;
+		this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
+		for (let i = 0; i < this.SHELL_N; i++) { this.shellMesh.setMatrixAt(i, this.dummy.matrix); this.shellMesh.setColorAt(i, this.tmpColor.set(0xffffff)); }
+		this.scene.add(this.shellMesh);
+		this.shells = Array.from({ length: this.SHELL_N }, () => ({ active: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, dmg: 0, team: 'bull' as Team, life: 0 }));
 	}
 
 	private buildSparks() {
@@ -645,7 +655,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camPitch = 0.62; this.camZoom = 1; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camPitch = 0.52; this.camZoom = 0.8; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -714,6 +724,53 @@ export class Battle {
 
 	// ---------- projectiles ----------
 
+	private fireShellAt(u: Unit, t: Unit) {
+		const p = this.shells[this.shellHead]; this.shellHead = (this.shellHead + 1) % this.SHELL_N;
+		const sx = u.x, sy = hillY(u.x) + 1.42 * u.scale * UNIT_SCALE * 0.5, sz = u.z;
+		const tx = t.x + (Math.random() - 0.5) * 2, tz = t.z + (Math.random() - 0.5) * 2, ty = hillY(tx) + 0.5;
+		const dist = Math.hypot(tx - sx, tz - sz);
+		const T = THREE.MathUtils.clamp(dist / 34, 0.35, 0.8), g = 14;
+		p.active = true; p.x = sx; p.y = sy; p.z = sz;
+		p.dmg = u.dmg * ATK_CD.colossus * KILL_TEMPO; p.team = u.team; p.life = T + 0.2;
+		p.vx = (tx - sx) / T; p.vz = (tz - sz) / T; p.vy = (ty - sy + 0.5 * g * T * T) / T;
+		// muzzle flash
+		this.spawnBurst(sx + (tx - sx) / dist * 2.2, sy, sz + (tz - sz) / dist * 2.2, new THREE.Color(0xffe9a0), 8);
+		this.shake = Math.min(1.2, this.shake + 0.06);
+	}
+
+	private updateShells(dt: number) {
+		const g = 14; let dirty = false;
+		for (let i = 0; i < this.SHELL_N; i++) {
+			const p = this.shells[i];
+			if (!p.active) continue;
+			p.vy -= g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.life -= dt;
+			if (p.y <= hillY(p.x) + 0.3 || p.life <= 0) {
+				p.active = false;
+				// EXPLOSION: big flash + splash damage
+				const col = p.team === 'bull' ? GOLD : CRIMSON;
+				this.spawnBurst(p.x, hillY(p.x) + 0.8, p.z, new THREE.Color(0xffd080), 16);
+				this.spawnBurst(p.x, hillY(p.x) + 0.8, p.z, col, 14);
+				this.addDecal(p.x, p.z, 1.5);
+				this.shake = Math.min(1.4, this.shake + 0.18);
+				let hits = 0;
+				for (const e of this.units) {
+					if (e.team === p.team || e.dying > 0 || e.hp <= 0) continue;
+					const dx = e.x - p.x, dz = e.z - p.z, d2 = dx * dx + dz * dz;
+					if (d2 < 3.2 * 3.2) { e.hp -= p.dmg * (d2 < 1.6 ? 1 : 0.55); e.struck = 0.16; if (e.hp <= 0) this.kill(e, []); if (++hits >= 5) break; }
+				}
+				this.dummy.scale.setScalar(0); this.dummy.updateMatrix(); this.shellMesh.setMatrixAt(i, this.dummy.matrix); dirty = true;
+				continue;
+			}
+			this.vTmp.set(p.vx, p.vy, p.vz).normalize();
+			this.q.setFromUnitVectors(this.upV, this.vTmp);
+			this.dummy.position.set(p.x, p.y, p.z); this.dummy.quaternion.copy(this.q); this.dummy.scale.setScalar(1.4); this.dummy.updateMatrix();
+			this.shellMesh.setMatrixAt(i, this.dummy.matrix);
+			this.shellMesh.setColorAt(i, this.tmpColor.copy(p.team === 'bull' ? GOLD : CRIMSON).lerp(new THREE.Color(0xffffff), 0.2));
+			dirty = true;
+		}
+		if (dirty) { this.shellMesh.instanceMatrix.needsUpdate = true; if (this.shellMesh.instanceColor) this.shellMesh.instanceColor.needsUpdate = true; }
+	}
+
 	private fireArrowAt(u: Unit, t: Unit) {
 		const p = this.proj[this.projHead]; this.projHead = (this.projHead + 1) % this.PROJ;
 		const sx = u.x, sy = hillY(u.x) + 1.4 * u.scale * UNIT_SCALE, sz = u.z;
@@ -765,6 +822,7 @@ export class Battle {
 
 		this.step(simDt);
 		this.updateArrows(simDt);
+		this.updateShells(simDt);
 		this.updateParticles(simDt);
 		this.updateDecals(simDt);
 		this.render(dt);
@@ -836,7 +894,11 @@ export class Battle {
 				u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), u.speed * dt);
 				if (u.target) {
 					desiredFace = Math.PI / 2 + Math.atan2(-(u.target.z - u.z), u.target.x - u.x);
-					if (u.atkCd <= 0) { this.fireArrowAt(u, u.target); u.atkCd = ATK_CD.archer + Math.random() * 0.7; u.strike = 0.3; }
+					if (u.atkCd <= 0) {
+						if (u.cls === 'colossus') { this.fireShellAt(u, u.target); u.atkCd = ATK_CD.colossus + Math.random() * 0.9; }
+						else { this.fireArrowAt(u, u.target); u.atkCd = ATK_CD.archer + Math.random() * 0.7; }
+						u.strike = 0.3;
+					}
 				}
 			} else if (u.target) {
 				const t = u.target;
@@ -934,7 +996,7 @@ export class Battle {
 	}
 
 	private kill(u: Unit, killers: Unit[]) {
-		u.dying = 0.6;
+		u.dying = 8; // fall, lie as a casualty on the field, then fade
 		this.spawnBurst(u.x, hillY(u.x) + 1.2, u.z, u.team === 'bull' ? GOLD : CRIMSON, u.legend ? 40 : 9);
 		this.spawnSoul(u.x, hillY(u.x) + 1.6, u.z, u.team === 'bull' ? GOLD : CRIMSON);
 		this.addDecal(u.x, u.z, u.scale);
@@ -955,10 +1017,14 @@ export class Battle {
 			const pop = u.age < 0.45 ? easeOutBack(Math.min(1, u.age / 0.45)) : 1;
 			const s = u.scale * UNIT_SCALE * Math.max(0.01, pop);
 			if (u.dying > 0) {
-				const t = u.dying / 0.6;
-				d.position.set(u.x, gy - (1 - t) * 0.9, u.z);
-				d.scale.set(s * (0.7 + t * 0.3), s * t, s * (0.7 + t * 0.3));
-				d.rotation.set((1 - t) * -1.5, u.face, (1 - t) * 0.4);
+				// fall over (0.45s) → lie as a casualty → sink away in the last second
+				const elapsed = 8 - u.dying;
+				const fall = Math.min(1, elapsed / 0.45);
+				const fade = u.dying < 1 ? u.dying : 1;
+				const flop = (u.idx % 2 === 0 ? 1 : -1) * fall * (Math.PI / 2) * 0.94;
+				d.position.set(u.x, gy + (1 - fall) * 0.2 - (1 - fade) * 0.55, u.z);
+				d.scale.setScalar(s * (0.55 + fade * 0.45));
+				d.rotation.set(0, u.face, flop);
 			} else if (u.ranged) {
 				const hop = Math.abs(Math.sin(u.bob * 0.6)) * 0.06 * u.scale;
 				// draw-and-loose: lean back on strike, snap forward on release
