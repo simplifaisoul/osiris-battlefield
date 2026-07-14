@@ -14,7 +14,7 @@
 		biggestWhaleUsd: 0, biggestWhaleWallet: '', commanders: [], bullComp: { ...EMPTY_COMP }, bearComp: { ...EMPTY_COMP }
 	};
 	let stats = $state<Stats>({ ...EMPTY });
-	let overlay = $state<Overlay>({ tracked: [], titans: [] });
+	let overlay = $state<Overlay>({ tracked: [], titans: [], kills: [] });
 	let token = $state<any>(null);
 	let feed = $state<{ id: number; text: string; side: string; amt: string; big: boolean; stamp: string }[]>([]);
 
@@ -59,7 +59,7 @@
 		if (token) battle?.setMarketCap(fmtUsd(token.marketCap), win.chg);
 		// reinforcement flow scaled from the window's real txn rate
 		const scale = 30; // battle-time amplification
-		const rate = (n: number) => Math.min(0.85, Math.max(0.06, (n / TF_SECS[tf]) * scale));
+		const rate = (n: number) => Math.min(1.0, Math.max(0.08, (n / TF_SECS[tf]) * scale));
 		battle?.setReinforceRates(rate(win.buys), rate(win.sells));
 	}
 	function setTf(next: TF) { tf = next; applyTf(); }
@@ -173,7 +173,7 @@
 			battle.start();
 
 			await loadToken();
-			const g = (n: number) => Math.max(14, Math.min(64, Math.round(n * 0.5)));
+			const g = (n: number) => Math.max(24, Math.min(100, Math.round(n * 0.75)));
 			battle.spawnGarrison(g(token?.buys24h ?? 80), g(token?.sells24h ?? 80));
 			await loadTrades(true);
 			ready = true;
@@ -205,6 +205,13 @@
 			<div class="track-label" style="left:{u.x}px;top:{u.y}px">
 				<div class="tl-tier">◆ {u.tier}</div>
 				<div class="tl-hp"><span style="width:{(u.hp / u.maxHp) * 100}%"></span></div>
+			</div>
+		{/if}
+	{/each}
+	{#each overlay.kills.slice(0, 20) as k}
+		{#if k.on}
+			<div class="kill-marker mono" class:bear={k.team === 'bear'} style="left:{k.x}px;top:{k.y}px;opacity:{1 - k.age}">
+				💀 {k.team === 'bull' ? '-1 LONG' : '-1 SHORT'}
 			</div>
 		{/if}
 	{/each}
@@ -290,7 +297,11 @@
 		<polyline points="100,64 {depth.ask} 52,64" fill="rgba(255,77,94,0.16)" stroke="var(--crimson)" stroke-width="0.8" />
 		<line x1="50" y1="0" x2="50" y2="64" stroke="rgba(255,255,255,0.25)" stroke-width="0.4" stroke-dasharray="1 1.5" />
 	</svg>
-	<div class="ob-foot mono"><span class="green">BID WALL</span><span class="dim">{token ? fmtPrice(token.priceUsd) : '—'}</span><span class="red">ASK WALL</span></div>
+	<div class="ob-foot mono">
+		<span class="green">{token ? fmtPrice(token.priceUsd * 0.982).replace('$', '') : 'BID'}</span>
+		<span class="dim">{token ? fmtPrice(token.priceUsd) : '—'}</span>
+		<span class="red">{token ? fmtPrice(token.priceUsd * 1.018).replace('$', '') : 'ASK'}</span>
+	</div>
 </div>
 
 <!-- ORDER FLOW ARMIES (bottom-left, above track) -->
@@ -313,7 +324,7 @@
 			<div class="feed-row" class:big={f.big} class:buy={f.side === 'buy'} class:sell={f.side === 'sell'}>
 				<span class="feed-stamp mono dim">{f.stamp}</span>
 				<span class="feed-text mono">{f.text}</span>
-				{#if f.amt}<span class="feed-amt mono">{f.amt}</span>{/if}
+				{#if f.amt}<span class="feed-src mono">PSWAP</span><span class="feed-amt mono">{f.amt}</span>{/if}
 			</div>
 		{/each}
 	</div>
@@ -352,6 +363,10 @@
 	.tl-tier { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 8px var(--green), 0 2px 3px #000; }
 	.tl-hp { width: 44px; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.6); margin: 3px auto 0; overflow: hidden; border: 1px solid rgba(20,241,149,0.5); }
 	.tl-hp span { display: block; height: 100%; background: var(--green); }
+
+	.kill-marker { position: absolute; transform: translate(-50%, -100%); font-size: 11px; font-weight: 700; color: #baffd6; letter-spacing: 0.04em; text-shadow: 0 0 8px rgba(20,241,149,0.7), 0 2px 3px #000; white-space: nowrap; }
+	.kill-marker.bear { color: #ffc2c8; text-shadow: 0 0 8px rgba(255,77,94,0.7), 0 2px 3px #000; }
+	.feed-src { font-size: 8px; letter-spacing: 0.08em; color: var(--text-3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; flex-shrink: 0; }
 
 	.flash { position: fixed; inset: 0; z-index: 58; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(255,255,255,0.6), rgba(200,255,220,0.2) 60%, transparent 100%); animation: flashfade 0.65s ease-out forwards; }
 	@keyframes flashfade { from { opacity: 1; } to { opacity: 0; } }

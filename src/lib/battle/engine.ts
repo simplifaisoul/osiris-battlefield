@@ -32,6 +32,7 @@ export type Stats = {
 export type Overlay = {
 	tracked: { x: number; y: number; on: boolean; tier: string; team: Team; hp: number; maxHp: number; kills: number; wallet: string }[];
 	titans: { x: number; y: number; on: boolean; label: string; team: Team }[];
+	kills: { x: number; y: number; on: boolean; team: Team; age: number }[];
 };
 
 type Unit = {
@@ -44,6 +45,8 @@ type Unit = {
 	// duel state
 	target: Unit | null; retarget: number; atkCd: number; strike: number; face: number;
 	tint: number; struck: number;
+	// battlefield-spread behaviour
+	lane: number; frontJitter: number; flank: boolean;
 };
 
 // per-class attack pacing (seconds between strikes)
@@ -275,6 +278,7 @@ export class Battle {
 	private shake = 0; private statTick = 0; private fpsAvg = 60;
 	private timeScale = 1; private slowmo = 0; private momentum = 0;
 	private reinB = 0; private reinS = 0; private accB = 0; private accS = 0;
+	private killFx: { x: number; z: number; team: Team; until: number }[] = [];
 	private decals!: THREE.InstancedMesh; private DECAL_N = 200; private decalHead = 0;
 	private decalLife!: Float32Array; private decalBase!: Float32Array; private decalX!: Float32Array; private decalZ!: Float32Array;
 
@@ -707,7 +711,10 @@ export class Battle {
 			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false,
 			target: null, retarget: Math.random() * 0.4, atkCd: Math.random() * 0.8, strike: 0,
 			face: sign < 0 ? 0 : Math.PI, // rotY that points local +x (weapon/barrel) at the enemy side
-			tint: 0.92 + Math.random() * 0.16, struck: 0
+			tint: 0.92 + Math.random() * 0.16, struck: 0,
+			lane: (Math.random() - 0.5) * ARENA_Z * 2,
+			frontJitter: -3 + Math.random() * 14, // most units press PAST the line — the war spreads deep
+			flank: !st.ranged && (cls === 'ronin' ? Math.random() < 0.38 : Math.random() < 0.12)
 		});
 	}
 
@@ -787,10 +794,12 @@ export class Battle {
 		// aim at the target with slight scatter
 		const tx = t.x + (Math.random() - 0.5) * 1.6, tz = t.z + (Math.random() - 0.5) * 1.6, ty = hillY(tx) + 0.9;
 		const dist = Math.hypot(tx - sx, tz - sz);
-		const T = THREE.MathUtils.clamp(dist / 26, 0.5, 1.05), g = 18;
+		const T = THREE.MathUtils.clamp(dist / 34, 0.35, 0.72), g = 18;
 		p.active = true; p.x = sx; p.y = sy; p.z = sz;
 		p.dmg = u.dmg * ATK_CD.archer * KILL_TEMPO * 0.6; p.team = u.team; p.life = T + 0.25;
 		p.vx = (tx - sx) / T; p.vz = (tz - sz) / T; p.vy = (ty - sy + 0.5 * g * T * T) / T;
+		// muzzle flash toward the target
+		this.spawnBurst(sx + ((tx - sx) / dist) * 1.1, sy, sz + ((tz - sz) / dist) * 1.1, new THREE.Color(0xffe9a0), 3);
 	}
 
 	private updateArrows(dt: number) {
@@ -810,9 +819,9 @@ export class Battle {
 			}
 			this.vTmp.set(p.vx, p.vy, p.vz).normalize();
 			this.q.setFromUnitVectors(this.upV, this.vTmp);
-			this.dummy.position.set(p.x, p.y, p.z); this.dummy.quaternion.copy(this.q); this.dummy.scale.setScalar(1.15); this.dummy.updateMatrix();
+			this.dummy.position.set(p.x, p.y, p.z); this.dummy.quaternion.copy(this.q); this.dummy.scale.setScalar(1.35); this.dummy.updateMatrix();
 			this.arrowMesh.setMatrixAt(i, this.dummy.matrix);
-			this.arrowMesh.setColorAt(i, this.tmpColor.copy(p.team === 'bull' ? GOLD : CRIMSON).lerp(new THREE.Color(0xffffff), 0.35));
+			this.arrowMesh.setColorAt(i, this.tmpColor.copy(p.team === 'bull' ? GOLD : CRIMSON).lerp(new THREE.Color(0xffffff), 0.55));
 			dirty = true;
 		}
 		if (dirty) { this.arrowMesh.instanceMatrix.needsUpdate = true; if (this.arrowMesh.instanceColor) this.arrowMesh.instanceColor.needsUpdate = true; }
@@ -898,10 +907,12 @@ export class Battle {
 			let desiredFace: number | null = null;
 
 			if (u.ranged) {
-				// archers hold a firing line behind the front and volley real targets
+				// archers/tanks hold staggered firing lines — depth varies per unit
 				u.melee = false;
-				const tx = this.frontX + u.sign * (u.standoff + u.rank * 0.9);
+				const tx = this.frontX + u.sign * (u.standoff + u.rank * 0.9 + Math.max(0, u.frontJitter) * 0.55);
 				u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), u.speed * dt);
+				// drift toward their lane so the line fills the whole arena depth
+				u.z += Math.sign(u.lane - u.z) * Math.min(Math.abs(u.lane - u.z), u.speed * 0.3 * dt);
 				if (u.target && (u.target.dying > 0 || u.target.hp <= 0)) u.target = null;
 				if (u.target) {
 					desiredFace = Math.atan2(-(u.target.z - u.z), u.target.x - u.x);
@@ -949,11 +960,22 @@ export class Battle {
 						}
 					}
 				}
-			} else {
-				// no enemy in range — march on the front
+			} else if (u.flank) {
+				// FLANKERS sweep the arena edge, cross behind the line, and strike from the side
 				u.melee = false;
-				const tx = this.frontX + u.sign * (u.standoff + u.rank * 0.9);
-				u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), u.speed * dt);
+				const wx = this.frontX - u.sign * (5 + Math.max(0, u.frontJitter));
+				const wz = (u.lane >= 0 ? 1 : -1) * (ARENA_Z - 3);
+				const dx = wx - u.x, dz = wz - u.z, d = Math.hypot(dx, dz);
+				if (d > 1) { const st2 = Math.min(d, u.speed * 1.1 * dt); u.x += (dx / d) * st2; u.z += (dz / d) * st2; }
+				desiredFace = Math.atan2(-dz, dx);
+			} else {
+				// no enemy in range — press to a personal depth PAST the line, then hold ground
+				u.melee = false;
+				const tx = this.frontX + u.sign * (u.standoff + u.rank * 0.9) - u.sign * Math.max(0, u.frontJitter);
+				const ahead = u.sign < 0 ? u.x >= tx : u.x <= tx; // already at/beyond their push depth
+				if (!ahead) u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), u.speed * dt);
+				// spread across the arena depth toward their lane
+				u.z += Math.sign(u.lane - u.z) * Math.min(Math.abs(u.lane - u.z), u.speed * 0.35 * dt);
 			}
 
 			// smooth facing
@@ -1018,6 +1040,8 @@ export class Battle {
 		this.addDecal(u.x, u.z, u.scale);
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;
 		this.totalKills++;
+		this.killFx.push({ x: u.x, z: u.z, team: u.team, until: performance.now() + 1200 });
+		if (this.killFx.length > 40) this.killFx.shift();
 		if (killers.length) { const killer = killers[(Math.random() * killers.length) | 0]; killer.kills++; if (killer.wallet) { const c = this.commanders.get(killer.wallet); if (c) c.kills++; } }
 		this.onEvent?.({ type: 'kill', team: u.team, tier: u.tier, cls: u.cls, wallet: u.wallet, usd: 0, pct: 0 });
 	}
@@ -1167,7 +1191,16 @@ export class Battle {
 			if (u.tracked) { const p = project(u.x, hillY(u.x) + u.scale * 2.3, u.z); tracked.push({ x: p.x, y: p.y, on: p.on, tier: u.tier, team: u.team, hp: Math.max(0, u.hp), maxHp: u.maxHp, kills: u.kills, wallet: u.wallet }); }
 			else if (u.legend) { const p = project(u.x, hillY(u.x) + u.scale * 2.3, u.z); titans.push({ x: p.x, y: p.y, on: p.on, label: u.tier, team: u.team }); }
 		}
-		this.onOverlay({ tracked, titans });
+		// floating casualty markers, rising as they fade
+		const now = performance.now();
+		this.killFx = this.killFx.filter((k) => k.until > now);
+		const kills: Overlay['kills'] = [];
+		for (const k of this.killFx) {
+			const age = 1 - (k.until - now) / 1200;
+			const p = project(k.x, groundY(k.x, k.z) + 2.2 + age * 2.4, k.z);
+			kills.push({ x: p.x, y: p.y, on: p.on, team: k.team, age });
+		}
+		this.onOverlay({ tracked, titans, kills });
 	}
 }
 
