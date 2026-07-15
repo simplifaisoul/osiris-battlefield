@@ -8,13 +8,13 @@ export type Tier = {
 	glyph: string;
 };
 
-// Highest first.
+// Highest first. Scales stay close — rank shows through auras, labels and gear, not size.
 export const TIERS: Tier[] = [
-	{ name: 'GOD', min: 1.0, scale: 3.6, hp: 3000, dmg: 90, glyph: '𓂀' },
-	{ name: 'TITAN', min: 0.25, scale: 2.3, hp: 1300, dmg: 46, glyph: '𓉔' },
-	{ name: 'CHAMPION', min: 0.05, scale: 1.55, hp: 560, dmg: 22, glyph: '𓋹' },
-	{ name: 'ELITE', min: 0.01, scale: 1.12, hp: 240, dmg: 11, glyph: '𓆃' },
-	{ name: 'SOLDIER', min: 0, scale: 0.85, hp: 95, dmg: 6, glyph: '𓀀' }
+	{ name: 'GOD', min: 1.0, scale: 1.45, hp: 3000, dmg: 90, glyph: '𓂀' },
+	{ name: 'TITAN', min: 0.25, scale: 1.28, hp: 1300, dmg: 46, glyph: '𓉔' },
+	{ name: 'CHAMPION', min: 0.05, scale: 1.14, hp: 560, dmg: 22, glyph: '𓋹' },
+	{ name: 'ELITE', min: 0.01, scale: 1.02, hp: 240, dmg: 11, glyph: '𓆃' },
+	{ name: 'SOLDIER', min: 0, scale: 0.92, hp: 95, dmg: 6, glyph: '𓀀' }
 ];
 
 export function tierForPct(pct: number): Tier {
@@ -22,4 +22,4 @@ export function tierForPct(pct: number): Tier {
 	return TIERS[TIERS.length - 1];
 }
 
-export const GARRISON: Tier = { name: 'GARRISON', min: 0, scale: 0.76, hp: 60, dmg: 4, glyph: '𓀀' };
+export const GARRISON: Tier = { name: 'GARRISON', min: 0, scale: 0.86, hp: 60, dmg: 4, glyph: '𓀀' };
