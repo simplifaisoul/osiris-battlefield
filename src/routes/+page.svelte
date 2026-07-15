@@ -7,7 +7,7 @@
 	let battle: Battle | null = null;
 	let audio: WarAudio | null = null;
 
-	const EMPTY_COMP: Comp = { spear: 0, ronin: 0, archer: 0, colossus: 0 };
+	const EMPTY_COMP: Comp = { spear: 0, duelist: 0, archer: 0, guardian: 0 };
 	const EMPTY: Stats = {
 		bulls: 0, bears: 0, bullPower: 0, bearPower: 0, frontPct: 50, casualtiesBull: 0, casualtiesBear: 0,
 		fps: 0, round: 1, winBull: 0, winBear: 0, phase: 'battle', winner: null, totalKills: 0,
@@ -169,8 +169,8 @@
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
 				if (e.type === 'legend') {
-					const c = e.cls === 'colossus' ? 'TANK' : e.cls.toUpperCase();
-					pushFeed(`◆ ${e.tier} ${c} ROLLS OUT — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
+					const c = e.cls === 'guardian' ? 'GUARDIAN' : e.cls.toUpperCase();
+					pushFeed(`◆ ${e.tier} ${c} AWAKENS — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
 					audio?.horn(!!e.god); if (e.god) doFlash();
 				}
 			};
@@ -247,8 +247,9 @@
 			<p class="intro-lore">
 				Every <span class="green">buy</span> deploys a soldier for the <span class="green">bulls</span>;
 				every <span class="red">sell</span> reinforces the <span class="red">bears</span>.
-				Bigger orders field mightier units — spearmen hold the line, ronin strike, archers rain fire,
-				and whales summon <span class="green">colossus</span> war-gods. Watch the order flow fight it out in real time.
+				Bigger orders field mightier warriors — spearmen hold the line, twin-khopesh duelists
+				dance through the melee, archers rain bronze, and whales awaken jackal-headed
+				<span class="green">guardians</span> of the Duat. Watch the order flow fight it out in real time.
 			</p>
 			<button class="enter-btn" onclick={enter} disabled={!ready}>{ready ? 'ENTER THE BATTLEFIELD' : 'LOADING ORDER FLOW…'}</button>
 			<div class="intro-hint mono">W A S D pan · scroll zoom · drag orbit · sound on</div>
@@ -350,11 +351,11 @@
 <div class="forces glass">
 	<div class="force">
 		<div class="force-head green mono">◤ BULLS · LONGS <span class="force-n">{stats.bulls}</span></div>
-		<div class="force-comp mono"><span><em>SPR</em> {stats.bullComp.spear}</span><span><em>RON</em> {stats.bullComp.ronin}</span><span><em>ARC</em> {stats.bullComp.archer}</span><span><em>TNK</em> {stats.bullComp.colossus}</span></div>
+		<div class="force-comp mono"><span><em>SPR</em> {stats.bullComp.spear}</span><span><em>DUE</em> {stats.bullComp.duelist}</span><span><em>ARC</em> {stats.bullComp.archer}</span><span><em>GRD</em> {stats.bullComp.guardian}</span></div>
 	</div>
 	<div class="force">
 		<div class="force-head red mono">BEARS · SHORTS ◥ <span class="force-n">{stats.bears}</span></div>
-		<div class="force-comp mono"><span><em>SPR</em> {stats.bearComp.spear}</span><span><em>RON</em> {stats.bearComp.ronin}</span><span><em>ARC</em> {stats.bearComp.archer}</span><span><em>TNK</em> {stats.bearComp.colossus}</span></div>
+		<div class="force-comp mono"><span><em>SPR</em> {stats.bearComp.spear}</span><span><em>DUE</em> {stats.bearComp.duelist}</span><span><em>ARC</em> {stats.bearComp.archer}</span><span><em>GRD</em> {stats.bearComp.guardian}</span></div>
 	</div>
 </div>
 
