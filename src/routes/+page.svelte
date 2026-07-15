@@ -289,6 +289,7 @@
 	</div>
 	<div class="top-right">
 		<div class="tally glass mono"><span class="dim">CAMPAIGN</span> <span class="gold">{stats.round}</span></div>
+		<div class="tally glass mono"><span class="green">{stats.winBull}W</span><span class="dim">WARS</span><span class="red">{stats.winBear}W</span></div>
 		<div class="tally glass mono"><span class="green">{Math.round(stats.frontPct)}%</span><span class="dim">FRONT</span><span class="red">{Math.round(100 - stats.frontPct)}%</span></div>
 		<button class="icon-btn glass" onclick={toggleSound}>{muted ? '🔇' : '🔊'}</button>
 	</div>
@@ -306,6 +307,27 @@
 	<div class="wall-kick mono green">BUY WALL · {TF_LABEL[tf]}</div>
 	<div class="wall-v mono green">{fmtUsd(win.buyVol)}</div>
 	<div class="wall-sub mono dim">TAPE {fmtUsd(buyUsd)}</div>
+</div>
+
+<!-- WAR LEDGER: top killer wallets + casualties (top-left, under sell wall) -->
+<div class="ledger glass">
+	<div class="ledger-head mono"><span>WAR LEDGER</span><span class="dim">KILLS</span></div>
+	{#each stats.commanders as c (c.wallet)}
+		<div class="ledger-row mono">
+			<span class="ledger-w" class:green={c.team === 'bull'} class:red={c.team === 'bear'}>{mask(c.wallet)}</span>
+			<span class="ledger-tier dim">{c.tier}</span>
+			<span class="ledger-k">{c.kills}</span>
+		</div>
+	{:else}
+		<div class="ledger-row mono"><span class="dim">Big trades field commanders…</span></div>
+	{/each}
+	<div class="ledger-foot mono">
+		<span class="dim">FALLEN</span>
+		<span class="green">{stats.casualtiesBull}</span><span class="dim">/</span><span class="red">{stats.casualtiesBear}</span>
+		{#if stats.biggestWhaleUsd > 0}
+			<span class="dim">· TOP WHALE</span> <span class="gold">{fmtUsd(stats.biggestWhaleUsd)}</span>
+		{/if}
+	</div>
 </div>
 
 <!-- ORDER BOOK DEPTH (bottom-left) -->
@@ -439,6 +461,15 @@
 	.wall-kick { font-size: 10px; letter-spacing: 0.2em; opacity: 0.8; }
 	.wall-v { font-size: 26px; font-weight: 800; text-shadow: 0 0 20px currentColor; }
 
+	.ledger { position: fixed; left: 22px; top: 168px; z-index: 10; width: 240px; padding: 10px 14px; }
+	.ledger-head { display: flex; justify-content: space-between; font-size: 9px; letter-spacing: 0.15em; color: var(--text-3); margin-bottom: 7px; }
+	.ledger-row { display: flex; align-items: baseline; gap: 8px; font-size: 10px; padding: 3px 0; }
+	.ledger-w { flex: 1; }
+	.ledger-w.green { color: #9affc4; } .ledger-w.red { color: #ffb0b8; }
+	.ledger-tier { font-size: 8px; letter-spacing: 0.08em; }
+	.ledger-k { font-weight: 700; color: #fff; }
+	.ledger-foot { font-size: 9px; letter-spacing: 0.06em; margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); display: flex; gap: 5px; flex-wrap: wrap; }
+
 	.orderbook { position: fixed; left: 22px; bottom: 118px; z-index: 10; width: 260px; padding: 12px 14px; }
 	.ob-head { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: 0.12em; margin-bottom: 8px; }
 	.ob-chart { width: 100%; height: 72px; display: block; }
@@ -474,7 +505,7 @@
 	.link { background: none; border: none; color: var(--green); cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0; }
 
 	@media (max-width: 1000px) {
-		.orderbook, .forces, .track { display: none; }
+		.orderbook, .forces, .track, .ledger { display: none; }
 		.feed { width: calc(100vw - 44px); bottom: 40px; }
 		.mcap-v { font-size: 30px; }
 		.brand, .top-right { width: auto; }

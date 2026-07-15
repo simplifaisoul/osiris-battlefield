@@ -111,7 +111,7 @@ function toonMaterial(): THREE.MeshToonMaterial {
 
 type Palette = { cloth: string; clothDark: string; skin: string; metal: string; wood: string; leather: string; accent: string };
 const PAL: Record<Team, Palette> = {
-	bull: { cloth: '#2fbf62', clothDark: '#1b8a44', skin: '#f2c89a', metal: '#d7dde6', wood: '#8a5a2b', leather: '#6b4a2f', accent: '#ffd34d' },
+	bull: { cloth: '#29d465', clothDark: '#189a4b', skin: '#f2c89a', metal: '#d7dde6', wood: '#8a5a2b', leather: '#6b4a2f', accent: '#ffd34d' },
 	bear: { cloth: '#ff5560', clothDark: '#c22f3c', skin: '#e8b088', metal: '#d7dde6', wood: '#7a4c22', leather: '#5c3c26', accent: '#ffd34d' }
 };
 
@@ -287,6 +287,7 @@ export class Battle {
 	private winner: Team | null = null;
 	private campaign = 1;
 	private wonUntil = 0;
+	private winsBull = 0; private winsBear = 0;
 	onCampaign: ((r: { winner: Team; campaign: number }) => void) | null = null;
 	private reinB = 0; private reinS = 0; private accB = 0; private accS = 0;
 	private killFx: { x: number; z: number; team: Team; until: number }[] = [];
@@ -691,7 +692,9 @@ export class Battle {
 		const god = tier.name === 'GOD';
 		const legend = god || tier.name === 'TITAN';
 		const cls = pickClass(tier.name, hash01(input.wallet + input.usd));
-		this.addUnit(team, cls, tier, input.wallet, legend, false);
+		const u = this.addUnit(team, cls, tier, input.wallet, legend, false);
+		// every real trade lands with a visible team-coloured muster flash
+		if (u) this.spawnBurst(u.x, groundY(u.x, u.z) + 1.2, u.z, team === 'bull' ? GOLD : CRIMSON, legend ? 26 : 6);
 		if (input.wallet) {
 			const c = this.commanders.get(input.wallet) || { kills: 0, tier: tier.name, team, usd: 0 };
 			c.team = team; c.usd = Math.max(c.usd, input.usd); if (rankIdx(tier.name) > rankIdx(c.tier)) c.tier = tier.name;
@@ -702,8 +705,8 @@ export class Battle {
 		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
 	}
 
-	private addUnit(team: Team, cls: Cls, tier: Tier, wallet: string, legend: boolean, atFront: boolean) {
-		const army = this.armies[`${team}:${cls}`]; if (!army || !army.free.length) return;
+	private addUnit(team: Team, cls: Cls, tier: Tier, wallet: string, legend: boolean, atFront: boolean): Unit | null {
+		const army = this.armies[`${team}:${cls}`]; if (!army || !army.free.length) return null;
 		const idx = army.free.pop()!;
 		const sign = team === 'bull' ? -1 : 1;
 		const st = CLASS_STATS[cls];
@@ -713,7 +716,8 @@ export class Battle {
 			standoff: st.standoff, speed: SPEED * st.speedMul,
 			wallet,
 			x: atFront ? sign * (3 + Math.random() * 13) : sign * (CAP - 2 - Math.random() * 4),
-			z: (Math.random() - 0.5) * ARENA_Z * 2,
+			// rear spawns muster on the road and march to the front in columns
+			z: atFront ? (Math.random() - 0.5) * ARENA_Z * 2 : ROAD_Z + (Math.random() - 0.5) * 7,
 			rank: atFront ? Math.random() * 3 : Math.random() * 6,
 			bob: Math.random() * Math.PI * 2, age: 0, cd: Math.random() * 1.5, kills: 0, idx, dying: 0,
 			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false,
@@ -724,6 +728,7 @@ export class Battle {
 			frontJitter: -3 + Math.random() * 14, // most units press PAST the line — the war spreads deep
 			flank: !st.ranged && (cls === 'ronin' ? Math.random() < 0.38 : Math.random() < 0.12)
 		});
+		return this.units[this.units.length - 1];
 	}
 
 	start() { this.last = performance.now(); this.loop(); }
@@ -916,6 +921,22 @@ export class Battle {
 			u.atkCd -= dt;
 			u.retarget -= dt;
 
+			// theater fell: winners celebrate where they stand, losers rout to their capital
+			if (this.phase === 'victory' && this.winner) {
+				u.melee = false; u.target = null; u.strike = 0;
+				if (u.team === this.winner) {
+					u.bob += dt * 9; // double-time victory bounce
+				} else {
+					u.x += u.sign * u.speed * 1.6 * dt;
+					const flee = u.sign < 0 ? Math.PI : 0; // run home, backs to the enemy
+					let dA = flee - u.face;
+					while (dA > Math.PI) dA -= Math.PI * 2;
+					while (dA < -Math.PI) dA += Math.PI * 2;
+					u.face += dA * Math.min(1, dt * 6);
+				}
+				continue;
+			}
+
 			// (re)acquire a real enemy to fight
 			if (u.retarget <= 0 || !u.target || u.target.hp <= 0 || u.target.dying > 0) {
 				u.target = acquire(u, u.ranged ? 30 : ACQUIRE_R);
@@ -1052,6 +1073,7 @@ export class Battle {
 
 	private winCampaign(team: Team) {
 		this.phase = 'victory'; this.winner = team; this.wonUntil = performance.now() + 4000; this.shake = 1.7;
+		if (team === 'bull') this.winsBull++; else this.winsBear++;
 		const loser = team === 'bull' ? this.capitalBear : this.capitalBull;
 		// the fallen base erupts
 		this.spawnBurst(loser.position.x, 4, 0, team === 'bull' ? CRIMSON : GOLD, 140);
@@ -1075,6 +1097,8 @@ export class Battle {
 		this.addDecal(u.x, u.z, u.scale);
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;
 		this.totalKills++;
+		// each casualty physically shoves the front toward the loser's base
+		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? 0.12 : -0.12), -FRONT_MAX, FRONT_MAX);
 		this.killFx.push({ x: u.x, z: u.z, team: u.team, until: performance.now() + 1200 });
 		if (this.killFx.length > 40) this.killFx.shift();
 		if (killers.length) { const killer = killers[(Math.random() * killers.length) | 0]; killer.kills++; if (killer.wallet) { const c = this.commanders.get(killer.wallet); if (c) c.kills++; } }
@@ -1211,7 +1235,7 @@ export class Battle {
 			bulls: this._bullCount, bears: this._bearCount, bullPower: this._bullPower, bearPower: this._bearPower,
 			frontPct: THREE.MathUtils.clamp(((this.frontX + FRONT_MAX) / (FRONT_MAX * 2)) * 100, 0, 100),
 			casualtiesBull: this.casualtiesBull, casualtiesBear: this.casualtiesBear, fps: Math.round(this.fpsAvg),
-			round: this.campaign, winBull: 0, winBear: 0, phase: this.phase, winner: this.winner,
+			round: this.campaign, winBull: this.winsBull, winBear: this.winsBear, phase: this.phase, winner: this.winner,
 			totalKills: this.totalKills, biggestWhaleUsd: this.biggestWhaleUsd, biggestWhaleWallet: this.biggestWhaleWallet,
 			commanders, bullComp: this._bullComp, bearComp: this._bearComp
 		});
