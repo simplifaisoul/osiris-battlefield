@@ -22,4 +22,4 @@ export function tierForPct(pct: number): Tier {
 	return TIERS[TIERS.length - 1];
 }
 
-export const GARRISON: Tier = { name: 'GARRISON', min: 0, scale: 0.68, hp: 60, dmg: 4, glyph: '𓀀' };
+export const GARRISON: Tier = { name: 'GARRISON', min: 0, scale: 0.76, hp: 60, dmg: 4, glyph: '𓀀' };

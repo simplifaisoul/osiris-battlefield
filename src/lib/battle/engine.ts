@@ -63,7 +63,7 @@ const BOARD_D = 98;
 const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 11;
-const UNIT_SCALE = 1.9;
+const UNIT_SCALE = 2.1;
 const CLASSES: Cls[] = ['spear', 'ronin', 'archer', 'colossus'];
 
 const CLASS_STATS: Record<Cls, { hpMul: number; dmgMul: number; scaleMul: number; ranged: boolean; standoff: number; speedMul: number }> = {
@@ -243,11 +243,17 @@ function groundTexture(): THREE.Texture {
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
 }
 function skyTexture(): THREE.Texture {
-	const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+	const c = document.createElement('canvas'); c.width = 512; c.height = 512;
 	const x = c.getContext('2d')!;
-	const g = x.createLinearGradient(0, 0, 0, 256);
+	const g = x.createLinearGradient(0, 0, 0, 512);
 	g.addColorStop(0, '#04060a'); g.addColorStop(0.55, '#080d10'); g.addColorStop(0.85, '#0c1512'); g.addColorStop(1, '#0f1a14');
-	x.fillStyle = g; x.fillRect(0, 0, 4, 256);
+	x.fillStyle = g; x.fillRect(0, 0, 512, 512);
+	// faint starfield in the upper sky
+	for (let i = 0; i < 240; i++) {
+		const sx = Math.random() * 512, sy = Math.pow(Math.random(), 1.6) * 330;
+		x.fillStyle = `rgba(200,220,255,${0.08 + Math.random() * 0.4})`;
+		x.beginPath(); x.arc(sx, sy, 0.3 + Math.random() * 1.0, 0, Math.PI * 2); x.fill();
+	}
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 function radialTexture(hex: string): THREE.Texture {
@@ -264,7 +270,7 @@ export class Battle {
 	private camera: THREE.PerspectiveCamera;
 	private composer!: EffectComposer;
 
-	private armies: Record<string, { mesh: THREE.InstancedMesh; free: number[] }> = {};
+	private armies: Record<string, { mesh: THREE.InstancedMesh; free: number[]; top: number }> = {};
 	private units: Unit[] = [];
 	private frontX = 0;
 	private terrainH: (x: number, z: number) => number = () => 0;
@@ -278,9 +284,11 @@ export class Battle {
 	private shells!: { active: boolean; x: number; y: number; z: number; vx: number; vy: number; vz: number; dmg: number; team: Team; life: number }[];
 	private shellHead = 0;
 
-	private raf = 0; private last = 0; private time = 0;
+	private raf = 0; private last = 0; private time = 0; private frame = 0;
 	private focus = false; private trackWallet: string | null = null;
 	private shake = 0; private statTick = 0; private fpsAvg = 60;
+	private quality = 2; private qualTick = 0;
+	private unbind: (() => void)[] = [];
 	private timeScale = 1; private slowmo = 0; private momentum = 0;
 	// war campaign: front advances to a base → theater falls → resets with the newer mcap
 	private phase: 'battle' | 'victory' = 'battle';
@@ -298,7 +306,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.06; private camPitch = 0.78; private camZoom = 1.18;
+	private camYaw = 0.06; private camPitch = 0.68; private camZoom = 1.02;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
@@ -309,6 +317,7 @@ export class Battle {
 	private capitalBull!: THREE.Group; private capitalBear!: THREE.Group; private frontLine!: THREE.Mesh;
 	private flags: THREE.Mesh[] = [];
 	private dummy = new THREE.Object3D(); private tmpColor = new THREE.Color();
+	private _camTarget = new THREE.Vector3(); private _camPos = new THREE.Vector3();
 	private q = new THREE.Quaternion(); private upV = new THREE.Vector3(0, 1, 0); private vTmp = new THREE.Vector3();
 
 	casualtiesBull = 0; casualtiesBear = 0;
@@ -318,8 +327,8 @@ export class Battle {
 	onEvent: ((e: BattleEvent) => void) | null = null;
 
 	constructor(canvas: HTMLCanvasElement) {
-		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-		this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+		this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 		this.renderer.setSize(innerWidth, innerHeight);
 		this.renderer.shadowMap.enabled = true;
 		this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -348,11 +357,14 @@ export class Battle {
 		this.buildDecals();
 		this.buildAuras();
 
-		this._resize = this.resize.bind(this);
-		addEventListener('resize', this._resize);
+		this.on(window, 'resize', () => this.resize());
 		this.bindCamera(canvas);
 	}
-	private _resize: () => void;
+
+	private on(t: EventTarget, k: string, fn: EventListener, opt?: AddEventListenerOptions) {
+		t.addEventListener(k, fn, opt);
+		this.unbind.push(() => t.removeEventListener(k, fn));
+	}
 
 	// ---------- pipeline ----------
 
@@ -369,11 +381,15 @@ export class Battle {
 	}
 
 	private buildLights() {
-		this.scene.add(new THREE.HemisphereLight(0x8fb0d0, 0x2c3520, 0.8));
-		const sun = new THREE.DirectionalLight(0xffeccc, 2.15);
-		sun.position.set(-34, 62, 26); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
-		const s = 78; sun.shadow.camera.left = -s; sun.shadow.camera.right = s; sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s; sun.shadow.camera.far = 190; sun.shadow.bias = -0.0004;
+		this.scene.add(new THREE.HemisphereLight(0x8fb0d0, 0x1f2a18, 0.65));
+		const sun = new THREE.DirectionalLight(0xffe2b0, 2.3);
+		sun.position.set(-34, 62, 26); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
+		const s = 64; sun.shadow.camera.left = -s; sun.shadow.camera.right = s; sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s; sun.shadow.camera.far = 170; sun.shadow.bias = -0.0004;
 		this.scene.add(sun);
+		// cool rim from the far side so silhouettes pop against the dark board
+		const rim = new THREE.DirectionalLight(0x9fc8ff, 0.85);
+		rim.position.set(38, 34, -46);
+		this.scene.add(rim);
 	}
 
 	private buildGround() {
@@ -383,7 +399,7 @@ export class Battle {
 		const pos = geo.attributes.position as THREE.BufferAttribute;
 		const colors = new Float32Array(pos.count * 3);
 		// moody war-map palette: bull grass vs bear dust, asphalt road, price gridlines
-		const bullSoil = new THREE.Color('#4c7a2c'), bearSoil = new THREE.Color('#6e5230');
+		const bullSoil = new THREE.Color('#3e6a21'), bearSoil = new THREE.Color('#5e452a');
 		const asphalt = new THREE.Color('#3c3c38'), dash = new THREE.Color('#d8d8d0'), grid = new THREE.Color('#e9e2c2');
 		const c = new THREE.Color();
 		for (let i = 0; i < pos.count; i++) {
@@ -401,7 +417,7 @@ export class Battle {
 			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.022);
 			// PRICE GRIDLINES: vertical ticks every 10 units — the terrain IS the mcap axis
 			const nearGrid = Math.abs(px - Math.round(px / 10) * 10);
-			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 40) c.lerp(grid, 0.32);
+			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 40) c.lerp(grid, 0.18);
 			// horizontal ROAD across the whole map
 			const roadDist = Math.abs(py - ROAD_Z);
 			if (roadDist < 2.1) {
@@ -421,6 +437,9 @@ export class Battle {
 		// dark board skirt so the map reads as a diorama floating in the void
 		const skirt = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, 3.4, BOARD_D), new THREE.MeshBasicMaterial({ color: 0x0a0d0a }));
 		skirt.position.y = -1.75; this.scene.add(skirt);
+		// soft pedestal glow beneath the floating diorama
+		const glow = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W * 2.1, BOARD_D * 2.3), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(70,120,95,0.5)'), transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
+		glow.rotation.x = -Math.PI / 2; glow.position.y = -3.6; this.scene.add(glow);
 	}
 
 	private buildProps() {
@@ -569,7 +588,7 @@ export class Battle {
 				mesh.instanceMatrix.needsUpdate = true;
 				this.scene.add(mesh);
 				const free: number[] = []; for (let i = 0; i < MAX; i++) free.push(MAX - 1 - i);
-				this.armies[`${team}:${cls}`] = { mesh, free };
+				this.armies[`${team}:${cls}`] = { mesh, free, top: -1 };
 			}
 		}
 	}
@@ -653,21 +672,22 @@ export class Battle {
 	// ---------- camera ----------
 
 	private bindCamera(canvas: HTMLCanvasElement) {
-		canvas.addEventListener('pointerdown', (e) => { this.dragging = true; this.lastPtr = { x: e.clientX, y: e.clientY }; this.manualUntil = performance.now() + 7000; });
-		addEventListener('pointerup', () => (this.dragging = false));
-		addEventListener('pointermove', (e) => {
+		this.on(canvas, 'pointerdown', (e) => { const p = e as PointerEvent; this.dragging = true; this.lastPtr = { x: p.clientX, y: p.clientY }; this.manualUntil = performance.now() + 7000; });
+		this.on(window, 'pointerup', () => (this.dragging = false));
+		this.on(window, 'pointermove', (e) => {
 			if (!this.dragging) return;
-			const dx = e.clientX - this.lastPtr.x, dy = e.clientY - this.lastPtr.y; this.lastPtr = { x: e.clientX, y: e.clientY };
+			const p = e as PointerEvent;
+			const dx = p.clientX - this.lastPtr.x, dy = p.clientY - this.lastPtr.y; this.lastPtr = { x: p.clientX, y: p.clientY };
 			this.camYaw -= dx * 0.005; this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * 0.0035, 0.05, 0.95); this.manualUntil = performance.now() + 7000;
 		});
-		canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + Math.sign(e.deltaY) * 0.08), 0.45, 2.0); }, { passive: false });
-		addEventListener('keydown', (e) => {
+		this.on(canvas, 'wheel', (e) => { e.preventDefault(); this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + Math.sign((e as WheelEvent).deltaY) * 0.08), 0.45, 2.0); }, { passive: false });
+		this.on(window, 'keydown', (e) => {
 			const tag = (e.target as HTMLElement)?.tagName;
 			if (tag === 'INPUT' || tag === 'TEXTAREA') return; // never hijack typing
-			const k = e.key.toLowerCase(); if ('wasd'.includes(k)) this.keys.add(k);
+			const k = (e as KeyboardEvent).key.toLowerCase(); if ('wasd'.includes(k)) this.keys.add(k);
 		});
-		addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
-		addEventListener('blur', () => this.keys.clear()); // no stuck pan on alt-tab
+		this.on(window, 'keyup', (e) => this.keys.delete((e as KeyboardEvent).key.toLowerCase()));
+		this.on(window, 'blur', () => this.keys.clear()); // no stuck pan on alt-tab
 	}
 
 	// ---------- public API ----------
@@ -678,7 +698,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.78; this.camZoom = 1.18; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.68; this.camZoom = 1.02; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -696,6 +716,12 @@ export class Battle {
 		// every real trade lands with a visible team-coloured muster flash
 		if (u) this.spawnBurst(u.x, groundY(u.x, u.z) + 1.2, u.z, team === 'bull' ? GOLD : CRIMSON, legend ? 26 : 6);
 		if (input.wallet) {
+			// bounded roster — drop the least notable wallet when full
+			if (!this.commanders.has(input.wallet) && this.commanders.size >= 160) {
+				let worstK: string | null = null, worst = Infinity;
+				for (const [w, c] of this.commanders) { const score = c.kills * 1000 + c.usd; if (score < worst) { worst = score; worstK = w; } }
+				if (worstK) this.commanders.delete(worstK);
+			}
 			const c = this.commanders.get(input.wallet) || { kills: 0, tier: tier.name, team, usd: 0 };
 			c.team = team; c.usd = Math.max(c.usd, input.usd); if (rankIdx(tier.name) > rankIdx(c.tier)) c.tier = tier.name;
 			this.commanders.set(input.wallet, c);
@@ -732,7 +758,18 @@ export class Battle {
 	}
 
 	start() { this.last = performance.now(); this.loop(); }
-	dispose() { cancelAnimationFrame(this.raf); removeEventListener('resize', this._resize); this.composer.dispose(); this.renderer.dispose(); }
+	dispose() {
+		cancelAnimationFrame(this.raf);
+		for (const off of this.unbind) off();
+		this.unbind = [];
+		this.scene.traverse((o) => {
+			const m = o as THREE.Mesh;
+			if (m.geometry) m.geometry.dispose();
+			const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
+			for (const mat of mats) { (mat as THREE.MeshBasicMaterial).map?.dispose(); mat.dispose(); }
+		});
+		this.composer.dispose(); this.renderer.dispose();
+	}
 	private resize() { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer.setSize(innerWidth, innerHeight); }
 
 	// ---------- particles ----------
@@ -844,10 +881,18 @@ export class Battle {
 
 	private loop = () => {
 		this.raf = requestAnimationFrame(this.loop);
+		this.frame++;
 		const now = performance.now();
 		const rawDt = Math.min((now - this.last) / 1000, 0.25); this.last = now;
 		const dt = Math.min(rawDt, 0.05); this.time += rawDt;
 		this.fpsAvg = this.fpsAvg * 0.92 + (1 / Math.max(rawDt, 0.001)) * 0.08;
+		// adaptive resolution: shed pixels before shedding frames, climb back when headroom returns
+		this.qualTick += rawDt;
+		if (this.qualTick > 2.5) {
+			this.qualTick = 0;
+			if (this.fpsAvg < 45 && this.quality > 0) this.applyQuality(this.quality - 1);
+			else if (this.fpsAvg > 58 && this.quality < 2) this.applyQuality(this.quality + 1);
+		}
 		this.slowmo = Math.max(0, this.slowmo - rawDt);
 		this.timeScale += ((this.slowmo > 0 ? 0.32 : 1) - this.timeScale) * Math.min(1, rawDt * 6);
 		const simDt = dt * this.timeScale;
@@ -860,8 +905,15 @@ export class Battle {
 		this.render(dt);
 
 		this.statTick += dt; if (this.statTick > 0.2) { this.statTick = 0; this.emitStats(); }
-		this.emitOverlay();
+		if (this.frame % 2 === 0) this.emitOverlay(); // 30Hz is plenty for DOM labels
 	};
+
+	private applyQuality(q: number) {
+		this.quality = q;
+		const ratio = q === 2 ? Math.min(devicePixelRatio, 1.5) : q === 1 ? 1 : 0.75;
+		this.renderer.setPixelRatio(ratio);
+		this.resize();
+	}
 
 	private emptyComp(): Comp { return { spear: 0, ronin: 0, archer: 0, colossus: 0 }; }
 	private _bullPower = 0; private _bearPower = 0; private _bullCount = 0; private _bearCount = 0;
@@ -1107,10 +1159,13 @@ export class Battle {
 
 	private updateInstances() {
 		const dirty = new Set<THREE.InstancedMesh>();
+		for (const key in this.armies) this.armies[key].top = -1;
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i];
 			if (u.dying <= 0 && u.hp <= 0) continue;
-			const mesh = this.armies[`${u.team}:${u.cls}`].mesh;
+			const army = this.armies[`${u.team}:${u.cls}`];
+			if (u.idx > army.top) army.top = u.idx;
+			const mesh = army.mesh;
 			const d = this.dummy, gy = groundY(u.x, u.z);
 			// spawn pop-in (Clash-style overshoot)
 			const pop = u.age < 0.45 ? easeOutBack(Math.min(1, u.age / 0.45)) : 1;
@@ -1173,6 +1228,8 @@ export class Battle {
 			this.dummy.scale.setScalar(0); this.dummy.updateMatrix(); army.mesh.setMatrixAt(u.idx, this.dummy.matrix); dirty.add(army.mesh); army.free.push(u.idx); this.units.splice(i, 1);
 		}
 		for (const m of dirty) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+		// only draw the occupied slice of each army buffer — empty ranks cost nothing
+		for (const key in this.armies) { const a = this.armies[key]; a.mesh.count = a.top + 1; }
 	}
 
 	private render(dt: number) {
@@ -1185,7 +1242,7 @@ export class Battle {
 			this.panX = THREE.MathUtils.clamp(this.panX, -56, 56); this.panZ = THREE.MathUtils.clamp(this.panZ, -44, 44);
 		}
 
-		let target = new THREE.Vector3(this.panX, 1, this.panZ);
+		const target = this._camTarget.set(this.panX, 1, this.panZ);
 		let radius = 60 * this.camZoom;
 		let height = THREE.MathUtils.lerp(24, 128, this.camPitch) * (0.55 + this.camZoom * 0.45);
 
@@ -1196,7 +1253,7 @@ export class Battle {
 
 		const shakeX = this.shake > 0 ? (Math.random() - 0.5) * this.shake * 2 : 0, shakeY = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
 		this.shake = Math.max(0, this.shake - dt * 1.4);
-		this.camera.position.lerp(new THREE.Vector3(target.x + Math.sin(this.camYaw) * radius + shakeX, height + shakeY, target.z + Math.cos(this.camYaw) * radius), Math.min(1, dt * 2.6));
+		this.camera.position.lerp(this._camPos.set(target.x + Math.sin(this.camYaw) * radius + shakeX, height + shakeY, target.z + Math.cos(this.camYaw) * radius), Math.min(1, dt * 2.6));
 		this.camera.lookAt(target);
 
 		// waving banners

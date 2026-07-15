@@ -66,9 +66,10 @@
 	}
 	function setTf(next: TF) { tf = next; applyTf(); }
 	const pressure = $derived(buyUsd + sellUsd > 0 ? (buyUsd / (buyUsd + sellUsd)) * 100 : 50);
+	// frontPct is the bulls' share of the field — high means buyers pushing
 	const marketPressure = $derived(
-		stats.frontPct < 45 ? { t: 'BUYERS ADVANCING', c: 'green' } :
-		stats.frontPct > 55 ? { t: 'SELLERS ADVANCING', c: 'red' } : { t: 'MARKET BALANCED', c: 'dim' }
+		stats.frontPct > 55 ? { t: 'BUYERS ADVANCING', c: 'green' } :
+		stats.frontPct < 45 ? { t: 'SELLERS ADVANCING', c: 'red' } : { t: 'MARKET BALANCED', c: 'dim' }
 	);
 
 	// Order-book depth (stylised from live buy/sell pressure)
@@ -169,7 +170,7 @@
 			battle.onEvent = (e: BattleEvent) => {
 				if (e.type === 'legend') {
 					const c = e.cls === 'colossus' ? 'TANK' : e.cls.toUpperCase();
-					pushFeed(`⚡ ${e.tier} ${c} ROLLS OUT — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
+					pushFeed(`◆ ${e.tier} ${c} ROLLS OUT — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
 					audio?.horn(!!e.god); if (e.god) doFlash();
 				}
 			};
@@ -208,11 +209,11 @@
 
 <div class="labels">
 	{#each overlay.titans.slice(0, 10) as t}
-		{#if t.on}<div class="titan-label" class:bear={t.team === 'bear'} style="left:{t.x}px;top:{t.y}px">{t.label}</div>{/if}
+		{#if t.on}<div class="titan-label" class:bear={t.team === 'bear'} style="transform:translate3d({t.x}px,{t.y}px,0) translate(-50%,-100%)">{t.label}</div>{/if}
 	{/each}
 	{#each overlay.tracked.slice(0, 8) as u}
 		{#if u.on}
-			<div class="track-label" style="left:{u.x}px;top:{u.y}px">
+			<div class="track-label" style="transform:translate3d({u.x}px,{u.y}px,0) translate(-50%,-100%)">
 				<div class="tl-tier">◆ {u.tier}</div>
 				<div class="tl-hp"><span style="width:{(u.hp / u.maxHp) * 100}%"></span></div>
 			</div>
@@ -220,8 +221,8 @@
 	{/each}
 	{#each overlay.kills.slice(0, 20) as k}
 		{#if k.on}
-			<div class="kill-marker mono" class:bear={k.team === 'bear'} style="left:{k.x}px;top:{k.y}px;opacity:{1 - k.age}">
-				💀 {k.team === 'bull' ? '-1 LONG' : '-1 SHORT'}
+			<div class="kill-marker mono" class:bear={k.team === 'bear'} style="transform:translate3d({k.x}px,{k.y}px,0) translate(-50%,-100%);opacity:{1 - k.age}">
+				✕ {k.team === 'bull' ? 'LONG DOWN' : 'SHORT DOWN'}
 			</div>
 		{/if}
 	{/each}
@@ -249,7 +250,7 @@
 				Bigger orders field mightier units — spearmen hold the line, ronin strike, archers rain fire,
 				and whales summon <span class="green">colossus</span> war-gods. Watch the order flow fight it out in real time.
 			</p>
-			<button class="enter-btn" onclick={enter} disabled={!ready}>{ready ? '⚔  ENTER THE BATTLEFIELD' : 'LOADING ORDER FLOW…'}</button>
+			<button class="enter-btn" onclick={enter} disabled={!ready}>{ready ? 'ENTER THE BATTLEFIELD' : 'LOADING ORDER FLOW…'}</button>
 			<div class="intro-hint mono">W A S D pan · scroll zoom · drag orbit · sound on</div>
 		</div>
 	</div>
@@ -291,7 +292,7 @@
 		<div class="tally glass mono"><span class="dim">CAMPAIGN</span> <span class="gold">{stats.round}</span></div>
 		<div class="tally glass mono"><span class="green">{stats.winBull}W</span><span class="dim">WARS</span><span class="red">{stats.winBear}W</span></div>
 		<div class="tally glass mono"><span class="green">{Math.round(stats.frontPct)}%</span><span class="dim">FRONT</span><span class="red">{Math.round(100 - stats.frontPct)}%</span></div>
-		<button class="icon-btn glass" onclick={toggleSound}>{muted ? '🔇' : '🔊'}</button>
+		<button class="icon-btn glass mono" onclick={toggleSound}>{muted ? 'SOUND OFF' : 'SOUND ON'}</button>
 	</div>
 </header>
 
@@ -349,11 +350,11 @@
 <div class="forces glass">
 	<div class="force">
 		<div class="force-head green mono">◤ BULLS · LONGS <span class="force-n">{stats.bulls}</span></div>
-		<div class="force-comp mono"><span>🛡 {stats.bullComp.spear}</span><span>🗡 {stats.bullComp.ronin}</span><span>🏹 {stats.bullComp.archer}</span><span>💥 {stats.bullComp.colossus} TANKS</span></div>
+		<div class="force-comp mono"><span><em>SPR</em> {stats.bullComp.spear}</span><span><em>RON</em> {stats.bullComp.ronin}</span><span><em>ARC</em> {stats.bullComp.archer}</span><span><em>TNK</em> {stats.bullComp.colossus}</span></div>
 	</div>
 	<div class="force">
 		<div class="force-head red mono">BEARS · SHORTS ◥ <span class="force-n">{stats.bears}</span></div>
-		<div class="force-comp mono"><span>🛡 {stats.bearComp.spear}</span><span>🗡 {stats.bearComp.ronin}</span><span>🏹 {stats.bearComp.archer}</span><span>💥 {stats.bearComp.colossus} TANKS</span></div>
+		<div class="force-comp mono"><span><em>SPR</em> {stats.bearComp.spear}</span><span><em>RON</em> {stats.bearComp.ronin}</span><span><em>ARC</em> {stats.bearComp.archer}</span><span><em>TNK</em> {stats.bearComp.colossus}</span></div>
 	</div>
 </div>
 
@@ -384,7 +385,7 @@
 				<span class="dim">YOUR UNITS</span> <span class="green">{trackedSummary.count}</span>
 				<span class="dim">· RANK</span> <span>{trackedSummary.best}</span>
 				<span class="dim">· SLAIN</span> <span class="red">{trackedSummary.kills}</span>
-			{:else}<span class="dim">No live units — trade to deploy ⚔</span>{/if}
+			{:else}<span class="dim">No live units — trade to deploy</span>{/if}
 			<button class="mini" class:on={focus} onclick={toggleFocus}>{focus ? '◉ FOLLOW' : '⤢ FOLLOW'}</button>
 			<button class="mini" onclick={stopTrack}>✕</button>
 		</div>
@@ -393,14 +394,15 @@
 
 <div class="controls mono dim">
 	<span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> PAN · <span class="key">SCROLL</span> ZOOM · DRAG ORBIT · <button class="link" onclick={resetCam}>RESET</button>
+	<span class="fps">{stats.fps} FPS</span>
 </div>
 
 <style>
 	.scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; z-index: 0; touch-action: none; }
 	.labels { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
-	.titan-label { position: absolute; transform: translate(-50%, -100%); font-family: var(--display); font-size: 12px; font-weight: 800; color: #7dffb0; text-shadow: 0 0 10px rgba(20,241,149,0.8), 0 2px 4px #000; white-space: nowrap; }
+	.titan-label { position: absolute; left: 0; top: 0; will-change: transform; font-family: var(--display); font-size: 12px; font-weight: 800; color: #7dffb0; text-shadow: 0 0 10px rgba(20,241,149,0.8), 0 2px 4px #000; white-space: nowrap; }
 	.titan-label.bear { color: #ff9aa6; text-shadow: 0 0 10px rgba(255,77,94,0.8), 0 2px 4px #000; }
-	.track-label { position: absolute; transform: translate(-50%, -100%); text-align: center; white-space: nowrap; }
+	.track-label { position: absolute; left: 0; top: 0; will-change: transform; text-align: center; white-space: nowrap; }
 	.tl-tier { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 8px var(--green), 0 2px 3px #000; }
 	.tl-hp { width: 44px; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.6); margin: 3px auto 0; overflow: hidden; border: 1px solid rgba(20,241,149,0.5); }
 	.tl-hp span { display: block; height: 100%; background: var(--green); }
@@ -412,7 +414,7 @@
 	.campaign.bear .camp-title { text-shadow: 0 0 38px rgba(255,77,94,0.55), 0 4px 20px #000; }
 	.camp-mcap { font-size: 15px; letter-spacing: 0.14em; color: var(--text); }
 
-	.kill-marker { position: absolute; transform: translate(-50%, -100%); font-size: 11px; font-weight: 700; color: #baffd6; letter-spacing: 0.04em; text-shadow: 0 0 8px rgba(20,241,149,0.7), 0 2px 3px #000; white-space: nowrap; }
+	.kill-marker { position: absolute; left: 0; top: 0; will-change: transform; font-size: 11px; font-weight: 700; color: #baffd6; letter-spacing: 0.04em; text-shadow: 0 0 8px rgba(20,241,149,0.7), 0 2px 3px #000; white-space: nowrap; }
 	.kill-marker.bear { color: #ffc2c8; text-shadow: 0 0 8px rgba(255,77,94,0.7), 0 2px 3px #000; }
 	.feed-src { font-size: 8px; letter-spacing: 0.08em; color: var(--text-3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; flex-shrink: 0; }
 
@@ -445,7 +447,8 @@
 	.pressure.green { color: var(--green); } .pressure.red { color: var(--crimson); } .pressure.dim { color: var(--text-2); }
 	.top-right { display: flex; align-items: center; gap: 10px; pointer-events: auto; width: 200px; justify-content: flex-end; }
 	.tally { display: flex; gap: 6px; padding: 10px 12px; font-size: 12px; font-weight: 700; }
-	.icon-btn { padding: 9px 12px; cursor: pointer; border: 1px solid var(--line); font-size: 14px; color: var(--text); }
+	.icon-btn { padding: 10px 12px; cursor: pointer; border: 1px solid var(--line); font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-2); }
+	.icon-btn:hover { color: var(--text); }
 
 	.tf-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; pointer-events: auto; }
 	.tf-toggle { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(8,10,8,0.55); border: 1px solid var(--line); backdrop-filter: blur(10px); }
@@ -479,6 +482,7 @@
 	.force-head { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; display: flex; justify-content: space-between; }
 	.force-n { color: #fff; }
 	.force-comp { display: flex; gap: 12px; font-size: 10px; color: var(--text-2); margin-top: 3px; }
+	.force-comp em { font-style: normal; font-size: 8px; letter-spacing: 0.08em; color: var(--text-3); }
 
 	.feed { position: fixed; right: 22px; bottom: 66px; z-index: 10; width: 340px; padding: 10px 12px; }
 	.feed-head { display: flex; justify-content: space-between; font-size: 9px; letter-spacing: 0.15em; color: var(--text-3); margin-bottom: 8px; }
@@ -502,6 +506,7 @@
 
 	.controls { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10; font-size: 9px; letter-spacing: 0.14em; display: flex; align-items: center; gap: 6px; }
 	.key { display: inline-block; border: 1px solid var(--line-2); border-radius: 4px; padding: 2px 6px; color: var(--text-2); }
+	.fps { margin-left: 8px; color: var(--text-3); }
 	.link { background: none; border: none; color: var(--green); cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0; }
 
 	@media (max-width: 1000px) {
