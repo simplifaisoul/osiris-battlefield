@@ -10,7 +10,7 @@
 	const EMPTY_COMP: Comp = { spear: 0, duelist: 0, archer: 0, guardian: 0 };
 	const EMPTY: Stats = {
 		bulls: 0, bears: 0, bullPower: 0, bearPower: 0, frontPct: 50, casualtiesBull: 0, casualtiesBear: 0,
-		fps: 0, round: 1, winBull: 0, winBear: 0, phase: 'battle', winner: null, totalKills: 0,
+		fps: 0, round: 1, winBull: 0, winBear: 0, phase: 'battle', winner: null, warPhase: 'form', totalKills: 0,
 		biggestWhaleUsd: 0, biggestWhaleWallet: '', commanders: [], bullComp: { ...EMPTY_COMP }, bearComp: { ...EMPTY_COMP }
 	};
 	let stats = $state<Stats>({ ...EMPTY });
@@ -60,8 +60,8 @@
 		battle?.setMomentum(win.chg);
 		if (token) battle?.setMarketCap(fmtUsd(token.marketCap), win.chg);
 		// reinforcement flow scaled from the window's real txn rate
-		const scale = 30; // battle-time amplification
-		const rate = (n: number) => Math.min(1.0, Math.max(0.08, (n / TF_SECS[tf]) * scale));
+		const scale = 55; // battle-time amplification
+		const rate = (n: number) => Math.min(2.2, Math.max(0.18, (n / TF_SECS[tf]) * scale));
 		battle?.setReinforceRates(rate(win.buys), rate(win.sells));
 	}
 	function setTf(next: TF) { tf = next; applyTf(); }
@@ -165,7 +165,12 @@
 			const { Battle } = await import('$lib/battle/engine');
 			if (!alive || !canvas) return;
 			battle = new Battle(canvas);
-			battle.onStats = (s) => (stats = s);
+			let lastWarPhase = 'form';
+			battle.onStats = (s) => {
+				if (s.warPhase === 'charge' && lastWarPhase !== 'charge' && s.phase === 'battle') audio?.horn(false);
+				lastWarPhase = s.warPhase;
+				stats = s;
+			};
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
 				if (e.type === 'legend') {
@@ -184,8 +189,8 @@
 			battle.start();
 
 			await loadToken();
-			const g = (n: number) => Math.max(24, Math.min(100, Math.round(n * 0.75)));
-			battle.spawnGarrison(g(token?.buys24h ?? 80), g(token?.sells24h ?? 80));
+			const g = (n: number) => Math.max(70, Math.min(220, Math.round(n * 1.2)));
+			battle.spawnGarrison(g(token?.buys24h ?? 120), g(token?.sells24h ?? 120));
 			await loadTrades(true);
 			ready = true;
 
@@ -290,6 +295,9 @@
 		{/if}
 	</div>
 	<div class="top-right">
+		<div class="tally glass mono warphase" class:hot={stats.warPhase === 'charge' || stats.warPhase === 'melee'}>
+			{stats.warPhase === 'form' ? 'FORMING RANKS' : stats.warPhase === 'charge' ? 'CHARGE!' : stats.warPhase === 'melee' ? 'MELEE' : 'REGROUP'}
+		</div>
 		<div class="tally glass mono"><span class="dim">CAMPAIGN</span> <span class="gold">{stats.round}</span></div>
 		<div class="tally glass mono"><span class="green">{stats.winBull}W</span><span class="dim">WARS</span><span class="red">{stats.winBear}W</span></div>
 		<div class="tally glass mono"><span class="green">{Math.round(stats.frontPct)}%</span><span class="dim">FRONT</span><span class="red">{Math.round(100 - stats.frontPct)}%</span></div>
@@ -448,6 +456,8 @@
 	.pressure.green { color: var(--green); } .pressure.red { color: var(--crimson); } .pressure.dim { color: var(--text-2); }
 	.top-right { display: flex; align-items: center; gap: 10px; pointer-events: auto; width: 200px; justify-content: flex-end; }
 	.tally { display: flex; gap: 6px; padding: 10px 12px; font-size: 12px; font-weight: 700; }
+	.warphase { font-size: 10px; letter-spacing: 0.12em; color: var(--text-2); }
+	.warphase.hot { color: var(--gold); border-color: rgba(var(--gold-rgb), 0.45); text-shadow: 0 0 12px rgba(var(--gold-rgb), 0.5); }
 	.icon-btn { padding: 10px 12px; cursor: pointer; border: 1px solid var(--line); font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-2); }
 	.icon-btn:hover { color: var(--text); }
 

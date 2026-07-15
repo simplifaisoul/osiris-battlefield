@@ -23,7 +23,7 @@ export type Stats = {
 	bulls: number; bears: number; bullPower: number; bearPower: number;
 	frontPct: number; casualtiesBull: number; casualtiesBear: number; fps: number;
 	round: number; winBull: number; winBear: number;
-	phase: 'battle' | 'victory'; winner: Team | null;
+	phase: 'battle' | 'victory'; winner: Team | null; warPhase: WarPhase;
 	totalKills: number; biggestWhaleUsd: number; biggestWhaleWallet: string;
 	commanders: Commander[]; bullComp: Comp; bearComp: Comp;
 };
@@ -44,22 +44,30 @@ type Unit = {
 	// duel state
 	target: Unit | null; retarget: number; atkCd: number; strike: number; face: number;
 	tint: number; struck: number;
-	// battlefield-spread behaviour
-	lane: number; frontJitter: number; flank: boolean;
+	// formation posting: quantized file (slot) across the field, rank depth (row) behind the front
+	lane: number; slot: number; row: number; frontJitter: number; flank: boolean;
 };
+
+// the war breathes in phases: dress ranks → sound the charge → melee → break and re-form
+export type WarPhase = 'form' | 'charge' | 'melee' | 'regroup';
+const PHASE_CYCLE = 21; // seconds per full rhythm
+function phaseAt(t: number): WarPhase {
+	const T = t % PHASE_CYCLE;
+	return T < 5 ? 'form' : T < 8 ? 'charge' : T < 17 ? 'melee' : 'regroup';
+}
 
 // per-class attack pacing (seconds between strikes)
 const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, guardian: 2.4 };
 const KILL_TEMPO = 2.6; // global lethality multiplier (per-hit = dmg * cd * tempo)
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
-const MAX = 340;
-const FRONT_MAX = 33;
-const CAP = FRONT_MAX + 17;
-const ARENA_Z = 36;
+const MAX = 500;
+const FRONT_MAX = 44;
+const CAP = FRONT_MAX + 19;
+const ARENA_Z = 48;
 // the battlefield is a bounded board floating in a dark void
-const BOARD_W = 128;
-const BOARD_D = 98;
+const BOARD_W = 170;
+const BOARD_D = 132;
 const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 11;
@@ -311,6 +319,7 @@ export class Battle {
 	private campaign = 1;
 	private wonUntil = 0;
 	private winsBull = 0; private winsBear = 0;
+	private warClock = 0; private battlePhase: WarPhase = 'form';
 	onCampaign: ((r: { winner: Team; campaign: number }) => void) | null = null;
 	private reinB = 0; private reinS = 0; private accB = 0; private accS = 0;
 	private killFx: { x: number; z: number; team: Team; until: number }[] = [];
@@ -321,7 +330,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.06; private camPitch = 0.68; private camZoom = 1.02;
+	private camYaw = 0.06; private camPitch = 0.68; private camZoom = 1.18;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
@@ -399,7 +408,7 @@ export class Battle {
 		this.scene.add(new THREE.HemisphereLight(0x8fb0d0, 0x1f2a18, 0.65));
 		const sun = new THREE.DirectionalLight(0xffe2b0, 2.3);
 		sun.position.set(-34, 62, 26); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
-		const s = 64; sun.shadow.camera.left = -s; sun.shadow.camera.right = s; sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s; sun.shadow.camera.far = 170; sun.shadow.bias = -0.0004;
+		const s = 86; sun.shadow.camera.left = -s; sun.shadow.camera.right = s; sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s; sun.shadow.camera.far = 200; sun.shadow.bias = -0.0004;
 		this.scene.add(sun);
 		// cool rim from the far side so silhouettes pop against the dark board
 		const rim = new THREE.DirectionalLight(0x9fc8ff, 0.85);
@@ -432,7 +441,7 @@ export class Battle {
 			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.022);
 			// PRICE GRIDLINES: vertical ticks every 10 units — the terrain IS the mcap axis
 			const nearGrid = Math.abs(px - Math.round(px / 10) * 10);
-			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 40) c.lerp(grid, 0.18);
+			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 56) c.lerp(grid, 0.18);
 			// horizontal ROAD across the whole map
 			const roadDist = Math.abs(py - ROAD_Z);
 			if (roadDist < 2.1) {
@@ -479,7 +488,7 @@ export class Battle {
 			parts.push(trunk, crown);
 		};
 		// palm groves across BOTH territories — clear of the road and the fighting lane
-		for (let i = 0; i < 120; i++) {
+		for (let i = 0; i < 170; i++) {
 			const x = rng(-BOARD_W / 2 + 6, BOARD_W / 2 - 6);
 			const z = rng(-BOARD_D / 2 + 6, BOARD_D / 2 - 6);
 			if (onRoad(z)) continue;
@@ -496,13 +505,13 @@ export class Battle {
 			const tip = paint(new THREE.ConeGeometry(0.4 * s, 0.6 * s, 4), '#ffd34d'); tip.rotateY(Math.PI / 4); tip.translate(x, y + 5.4 * s, z);
 			parts.push(base, shaft, tip);
 		};
-		for (const [ox, oz, os] of [[-30, 14.5, 1], [-30, 3.5, 1], [34, 14.5, 1.1], [34, 3.5, 1.1], [-52, -20, 0.8], [50, 26, 0.8]] as const) obeliskAt(ox, oz, os);
+		for (const [ox, oz, os] of [[-38, 14.5, 1], [-38, 3.5, 1], [42, 14.5, 1.1], [42, 3.5, 1.1], [-66, -26, 0.8], [64, 32, 0.8]] as const) obeliskAt(ox, oz, os);
 		const merged = mergeGeometries(parts, false)!; merged.computeVertexNormals();
 		const mesh = new THREE.Mesh(merged, toonMaterial()); mesh.castShadow = true; mesh.receiveShadow = true; this.scene.add(mesh);
 
 		// oases — flat translucent pools, one deep in each territory
 		const lakeMat = new THREE.MeshBasicMaterial({ color: 0x2f7fb8, transparent: true, opacity: 0.72 });
-		for (const [lx, lz, r] of [[-34, -26, 8], [40, 28, 9]] as const) {
+		for (const [lx, lz, r] of [[-46, -34, 9], [52, 36, 10]] as const) {
 			const lake = new THREE.Mesh(new THREE.CircleGeometry(r, 24), lakeMat);
 			lake.rotation.x = -Math.PI / 2; lake.scale.y = 0.6; lake.position.set(lx, this.terrainH(lx, lz) + 0.12, lz);
 			this.scene.add(lake);
@@ -518,7 +527,7 @@ export class Battle {
 			const door = paint(new THREE.BoxGeometry(0.3, 0.5, 0.08), '#3a2a16'); door.translate(x, y + 0.25, z + 0.86);
 			vparts.push(base, roof, door);
 		};
-		for (const [vx, vz] of [[-48, 34], [48, -34], [-54, -28], [52, 30]] as const)
+		for (const [vx, vz] of [[-64, 44], [62, -44], [-70, -38], [68, 40]] as const)
 			for (let k = 0; k < 4; k++) houseAt(vx + rng(-4, 4), vz + rng(-4, 4), Math.random() < 0.5 ? '#d8c9a8' : '#c8ab7e');
 		const vm = mergeGeometries(vparts, false)!; vm.computeVertexNormals();
 		const vmesh = new THREE.Mesh(vm, toonMaterial()); vmesh.castShadow = true; this.scene.add(vmesh);
@@ -725,7 +734,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.68; this.camZoom = 1.02; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.68; this.camZoom = 1.18; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -778,8 +787,11 @@ export class Battle {
 			face: sign < 0 ? 0 : Math.PI, // rotY that points local +x (weapon/barrel) at the enemy side
 			tint: 0.92 + Math.random() * 0.16, struck: 0,
 			lane: (Math.random() - 0.5) * ARENA_Z * 2,
-			frontJitter: -3 + Math.random() * 14, // most units press PAST the line — the war spreads deep
-			flank: !st.ranged && (cls === 'duelist' ? Math.random() < 0.38 : Math.random() < 0.12)
+			// formation post: quantized file across the field, class decides the rank depth
+			slot: Math.round(((Math.random() - 0.5) * (ARENA_Z * 2 - 6)) / 2.6) * 2.6,
+			row: cls === 'guardian' ? 0 : cls === 'spear' ? (Math.random() < 0.55 ? 0 : 1) : 2 + ((Math.random() * 2) | 0),
+			frontJitter: -3 + Math.random() * 14, // ranged skirmish depth
+			flank: !st.ranged && (cls === 'duelist' ? Math.random() < 0.3 : Math.random() < 0.08)
 		});
 		return this.units[this.units.length - 1];
 	}
@@ -899,6 +911,8 @@ export class Battle {
 	private _bullComp = this.emptyComp(); private _bearComp = this.emptyComp();
 
 	private step(dt: number) {
+		this.warClock += dt;
+		this.battlePhase = phaseAt(this.warClock);
 		let bullPower = 0, bearPower = 0, bullCount = 0, bearCount = 0;
 		const bc = this.emptyComp(), rc = this.emptyComp();
 		for (const u of this.units) {
@@ -968,9 +982,12 @@ export class Battle {
 				continue;
 			}
 
-			// (re)acquire a real enemy to fight
+			// (re)acquire a real enemy to fight — how far we lock on breathes with the war rhythm
+			const wp = this.battlePhase;
+			const holding = wp === 'form' || wp === 'regroup';
 			if (u.retarget <= 0 || !u.target || u.target.hp <= 0 || u.target.dying > 0) {
-				u.target = acquire(u, u.ranged ? 30 : ACQUIRE_R);
+				const range = u.ranged ? 32 : wp === 'charge' ? 30 : wp === 'melee' ? ACQUIRE_R : 5;
+				u.target = acquire(u, range);
 				u.retarget = 0.3 + Math.random() * 0.3;
 			}
 
@@ -991,15 +1008,15 @@ export class Battle {
 						u.strike = 0.3;
 					}
 				}
-			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0) {
+			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0 && (!holding || this.inContact(u, u.target))) {
 				const t = u.target;
 				const dx = t.x - u.x, dz = t.z - u.z;
 				const dist = Math.hypot(dx, dz);
 				const reach = (u.scale + t.scale) * 0.5 * UNIT_SCALE * 1.1 + (u.cls === 'guardian' ? 1.1 : 0.45);
 				desiredFace = Math.atan2(-dz, dx);
 				if (dist > reach) {
-					// charge the target
-					const step = Math.min(dist - reach * 0.9, u.speed * dt);
+					// close with the enemy — a sounded charge doubles the fury
+					const step = Math.min(dist - reach * 0.9, u.speed * (wp === 'charge' ? 1.7 : 1) * dt);
 					u.x += (dx / dist) * step; u.z += (dz / dist) * step;
 					u.melee = dist < reach * 3;
 				} else {
@@ -1029,7 +1046,7 @@ export class Battle {
 						}
 					}
 				}
-			} else if (u.flank) {
+			} else if (u.flank && !holding) {
 				// FLANKERS sweep the arena edge, cross behind the line, and strike from the side
 				u.melee = false;
 				const wx = this.frontX - u.sign * (5 + Math.max(0, u.frontJitter));
@@ -1038,13 +1055,18 @@ export class Battle {
 				if (d > 1) { const st2 = Math.min(d, u.speed * 1.1 * dt); u.x += (dx / d) * st2; u.z += (dz / d) * st2; }
 				desiredFace = Math.atan2(-dz, dx);
 			} else {
-				// no enemy in range — press to a personal depth PAST the line, then hold ground
+				// DRESS RANKS — hold a formation post behind the front; the charge presses the wall forward
 				u.melee = false;
-				const tx = this.frontX + u.sign * (u.standoff + u.rank * 0.9) - u.sign * Math.max(0, u.frontJitter);
-				const ahead = u.sign < 0 ? u.x >= tx : u.x <= tx; // already at/beyond their push depth
-				if (!ahead) u.x += Math.sign(tx - u.x) * Math.min(Math.abs(tx - u.x), u.speed * dt);
-				// spread across the arena depth toward their lane
-				u.z += Math.sign(u.lane - u.z) * Math.min(Math.abs(u.lane - u.z), u.speed * 0.35 * dt);
+				if (holding) u.target = null;
+				const press = wp === 'charge' ? -3.5 : wp === 'melee' ? -0.5 : 0;
+				const fx2 = this.frontX + u.sign * (2.4 + u.row * 1.7 + press);
+				const fz2 = THREE.MathUtils.clamp(u.slot, -ARENA_Z + 2, ARENA_Z - 2);
+				const ddx = fx2 - u.x, ddz = fz2 - u.z, dd = Math.hypot(ddx, ddz);
+				if (dd > 0.15) {
+					const st2 = Math.min(dd, u.speed * (wp === 'charge' ? 1.6 : 1) * dt);
+					u.x += (ddx / dd) * st2; u.z += (ddz / dd) * st2;
+				}
+				desiredFace = u.sign < 0 ? 0 : Math.PI; // eyes on the enemy line
 			}
 
 			// smooth facing
@@ -1101,6 +1123,13 @@ export class Battle {
 		this._bullPower = bullPower; this._bearPower = bearPower; this._bullCount = bullCount; this._bearCount = bearCount; this._bullComp = bc; this._bearComp = rc;
 	}
 
+	// already blade-to-blade — you cannot disengage mid-fight to dress ranks
+	private inContact(u: Unit, t: Unit): boolean {
+		const dx = t.x - u.x, dz = t.z - u.z;
+		const r = (u.scale + t.scale) * 0.5 * UNIT_SCALE * 1.1 + 3.4;
+		return dx * dx + dz * dz < r * r;
+	}
+
 	private winCampaign(team: Team) {
 		this.phase = 'victory'; this.winner = team; this.wonUntil = performance.now() + 4000; this.shake = 1.7;
 		if (team === 'bull') this.winsBull++; else this.winsBear++;
@@ -1116,6 +1145,7 @@ export class Battle {
 		for (const u of this.units) this.armies[`${u.team}:${u.cls}`].mesh.setMatrixAt(u.idx, this.dummy.matrix);
 		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
+		this.warClock = 0; // new campaign opens with both hosts forming ranks
 		this.spawnGarrison(this.lastGarrison.bulls, this.lastGarrison.bears);
 	}
 
@@ -1181,8 +1211,8 @@ export class Battle {
 				d.scale.setScalar(s);
 				d.rotation.set(0.06, u.face, Math.sin(u.bob * 3) * 0.05);
 			} else {
-				// waddle march — bouncy, side-to-side, leaning in
-				const gait = Math.sin(u.bob);
+				// march in step — the cadence ripples down the file like a drilled phalanx
+				const gait = Math.sin(u.ranged ? u.bob : this.time * 8.5 + u.slot * 0.35 + u.row * 0.9);
 				d.position.set(u.x, gy + Math.abs(gait) * 0.22 * u.scale, u.z);
 				d.scale.setScalar(s);
 				d.rotation.set(0.1, u.face, gait * 0.14);
@@ -1210,7 +1240,7 @@ export class Battle {
 			if (this.keys.has('s')) { this.panX += sy * spd; this.panZ += cy * spd; }
 			if (this.keys.has('a')) { this.panX -= cy * spd; this.panZ += sy * spd; }
 			if (this.keys.has('d')) { this.panX += cy * spd; this.panZ -= sy * spd; }
-			this.panX = THREE.MathUtils.clamp(this.panX, -56, 56); this.panZ = THREE.MathUtils.clamp(this.panZ, -44, 44);
+			this.panX = THREE.MathUtils.clamp(this.panX, -74, 74); this.panZ = THREE.MathUtils.clamp(this.panZ, -58, 58);
 		}
 
 		const target = this._camTarget.set(this.panX, 1, this.panZ);
@@ -1263,7 +1293,7 @@ export class Battle {
 			bulls: this._bullCount, bears: this._bearCount, bullPower: this._bullPower, bearPower: this._bearPower,
 			frontPct: THREE.MathUtils.clamp(((this.frontX + FRONT_MAX) / (FRONT_MAX * 2)) * 100, 0, 100),
 			casualtiesBull: this.casualtiesBull, casualtiesBear: this.casualtiesBear, fps: Math.round(this.fpsAvg),
-			round: this.campaign, winBull: this.winsBull, winBear: this.winsBear, phase: this.phase, winner: this.winner,
+			round: this.campaign, winBull: this.winsBull, winBear: this.winsBear, phase: this.phase, winner: this.winner, warPhase: this.battlePhase,
 			totalKills: this.totalKills, biggestWhaleUsd: this.biggestWhaleUsd, biggestWhaleWallet: this.biggestWhaleWallet,
 			commanders, bullComp: this._bullComp, bearComp: this._bearComp
 		});
