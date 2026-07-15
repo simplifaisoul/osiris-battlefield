@@ -159,6 +159,7 @@
 
 	onMount(() => {
 		let alive = true;
+		if (new URLSearchParams(location.search).has('nointro')) { entered = true; muted = true; }
 		(async () => {
 			const { Battle } = await import('$lib/battle/engine');
 			if (!alive || !canvas) return;

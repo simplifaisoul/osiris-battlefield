@@ -2,8 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
 	EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, VignetteEffect,
-	NoiseEffect, ChromaticAberrationEffect, ToneMappingEffect, ToneMappingMode,
-	GodRaysEffect, BrightnessContrastEffect, HueSaturationEffect, KernelSize, BlendFunction
+	ToneMappingEffect, ToneMappingMode
 } from 'postprocessing';
 import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, type Tier } from './tiers';
@@ -241,20 +240,22 @@ function groundTexture(): THREE.Texture {
 	const x = c.getContext('2d')!;
 	x.fillStyle = '#b8b2a2'; x.fillRect(0, 0, 512, 512);
 	for (let i = 0; i < 18000; i++) { const v = 150 + Math.random() * 80; x.fillStyle = `rgba(${v},${v - 6},${v - 20},${Math.random() * 0.4})`; x.fillRect(Math.random() * 512, Math.random() * 512, 2, 2); }
-	const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
+	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
 }
 function skyTexture(): THREE.Texture {
 	const c = document.createElement('canvas'); c.width = 4; c.height = 256;
 	const x = c.getContext('2d')!;
 	const g = x.createLinearGradient(0, 0, 0, 256);
 	g.addColorStop(0, '#04060a'); g.addColorStop(0.55, '#080d10'); g.addColorStop(0.85, '#0c1512'); g.addColorStop(1, '#0f1a14');
-	x.fillStyle = g; x.fillRect(0, 0, 4, 256); return new THREE.CanvasTexture(c);
+	x.fillStyle = g; x.fillRect(0, 0, 4, 256);
+	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 function radialTexture(hex: string): THREE.Texture {
 	const c = document.createElement('canvas'); c.width = c.height = 128;
 	const x = c.getContext('2d')!;
 	const g = x.createRadialGradient(64, 64, 0, 64, 64, 64); g.addColorStop(0, hex); g.addColorStop(1, 'rgba(0,0,0,0)');
-	x.fillStyle = g; x.fillRect(0, 0, 128, 128); return new THREE.CanvasTexture(c);
+	x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
 export class Battle {
@@ -324,7 +325,7 @@ export class Battle {
 		this.renderer.toneMapping = THREE.NoToneMapping;
 
 		this.scene.background = skyTexture();
-		this.scene.fog = new THREE.FogExp2(0x06090b, 0.0042);
+		this.scene.fog = new THREE.FogExp2(0x06090b, 0.0028);
 
 		this.camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 700);
 		this.camera.position.set(0, 40, 60);
@@ -355,28 +356,15 @@ export class Battle {
 	// ---------- pipeline ----------
 
 	private buildComposer() {
-		const sun = new THREE.Mesh(new THREE.SphereGeometry(20, 32, 32), new THREE.MeshBasicMaterial({ color: 0xfff4cf }));
-		sun.position.set(60, 70, -215); sun.frustumCulled = false; this.scene.add(sun);
-
 		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: THREE.HalfFloatType });
 		this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-		const godRays = new GodRaysEffect(this.camera, sun, { density: 0.9, decay: 0.92, weight: 0.12, exposure: 0.2, samples: 32, clampMax: 1, kernelSize: KernelSize.MEDIUM, blur: true, resolutionScale: 0.5 });
-		const bloom = new BloomEffect({ intensity: 0.55, luminanceThreshold: 0.72, luminanceSmoothing: 0.3, mipmapBlur: true, radius: 0.7, kernelSize: KernelSize.HUGE });
+		// one lean pass: subtle bloom on true highlights, filmic tone map, gentle vignette
+		const bloom = new BloomEffect({ intensity: 0.42, luminanceThreshold: 0.82, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.6 });
 		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-		const bc = new BrightnessContrastEffect({ brightness: -0.015, contrast: 0.18 });
-		const hs = new HueSaturationEffect({ saturation: 0.06 });
-		const vignette = new VignetteEffect({ offset: 0.26, darkness: 0.64 });
-		const ca = new ChromaticAberrationEffect({ offset: new THREE.Vector2(0.0005, 0.0005), radialModulation: true, modulationOffset: 0.5 });
-		const noise = new NoiseEffect({ blendFunction: BlendFunction.SOFT_LIGHT });
-		(noise as unknown as { blendMode: { opacity: { value: number } } }).blendMode.opacity.value = 0.14;
-		const smaa = new SMAAEffect();
-
-		this.composer.addPass(new EffectPass(this.camera, godRays));
-		this.composer.addPass(new EffectPass(this.camera, bloom));
-		this.composer.addPass(new EffectPass(this.camera, tone, bc, hs, vignette, noise));
-		this.composer.addPass(new EffectPass(this.camera, ca));
-		this.composer.addPass(new EffectPass(this.camera, smaa));
+		const vignette = new VignetteEffect({ offset: 0.24, darkness: 0.58 });
+		this.composer.addPass(new EffectPass(this.camera, bloom, tone, vignette));
+		this.composer.addPass(new EffectPass(this.camera, new SMAAEffect()));
 	}
 
 	private buildLights() {
@@ -409,7 +397,7 @@ export class Battle {
 			// hand-painted patches + mow stripes
 			const patch = noise2D(px * 0.1, py * 0.1) * 0.5 + 0.5;
 			c.multiplyScalar(0.85 + patch * 0.3);
-			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.05);
+			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.022);
 			// PRICE GRIDLINES: vertical ticks every 10 units — the terrain IS the mcap axis
 			const nearGrid = Math.abs(px - Math.round(px / 10) * 10);
 			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 40) c.lerp(grid, 0.32);
@@ -509,7 +497,8 @@ export class Battle {
 	}
 
 	private buildFrontLine(): THREE.Mesh {
-		const m = new THREE.Mesh(new THREE.PlaneGeometry(6, ARENA_Z * 2 + 12), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,255,255,0.85)'), color: 0xffffff, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+		// crisp glowing seam instead of a wide haze column
+		const m = new THREE.Mesh(new THREE.PlaneGeometry(2.2, ARENA_Z * 2 + 12), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,244,200,0.9)'), color: 0xfff2c0, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false }));
 		m.rotation.x = -Math.PI / 2; m.position.y = 0.06; this.scene.add(m); return m;
 	}
 
@@ -517,7 +506,7 @@ export class Battle {
 	private priceCanvas!: HTMLCanvasElement;
 	private buildGroundText() {
 		const c = document.createElement('canvas'); c.width = 1024; c.height = 256; this.priceCanvas = c;
-		this.priceTex = new THREE.CanvasTexture(c);
+		this.priceTex = new THREE.CanvasTexture(c); this.priceTex.colorSpace = THREE.SRGBColorSpace;
 		const mesh = new THREE.Mesh(new THREE.PlaneGeometry(60, 15), new THREE.MeshBasicMaterial({ map: this.priceTex, transparent: true, opacity: 0.55, depthWrite: false }));
 		mesh.rotation.x = -Math.PI / 2; mesh.position.set(0, 0.25, 40);
 		this.scene.add(mesh);
@@ -528,7 +517,7 @@ export class Battle {
 	private mcapTex!: THREE.CanvasTexture;
 	private buildMcapSign() {
 		const c = document.createElement('canvas'); c.width = 512; c.height = 200; this.mcapCanvas = c;
-		this.mcapTex = new THREE.CanvasTexture(c);
+		this.mcapTex = new THREE.CanvasTexture(c); this.mcapTex.colorSpace = THREE.SRGBColorSpace;
 		this.mcapSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.mcapTex, transparent: true, depthTest: false }));
 		this.mcapSprite.scale.set(18, 7, 1);
 		this.mcapSprite.renderOrder = 999;
@@ -653,8 +642,8 @@ export class Battle {
 		const runeGeo = new THREE.RingGeometry(1.05, 1.3, 40), rune2Geo = new THREE.RingGeometry(1.55, 1.68, 40), crownGeo = new THREE.OctahedronGeometry(0.22, 0);
 		for (let i = 0; i < 12; i++) {
 			const grp = new THREE.Group();
-			const r1 = new THREE.Mesh(runeGeo, new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })); r1.rotation.x = -Math.PI / 2; r1.position.y = 0.08; r1.name = 'r1';
-			const r2 = new THREE.Mesh(rune2Geo, new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })); r2.rotation.x = -Math.PI / 2; r2.position.y = 0.08; r2.name = 'r2';
+			const r1 = new THREE.Mesh(runeGeo, new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })); r1.rotation.x = -Math.PI / 2; r1.position.y = 0.08; r1.name = 'r1';
+			const r2 = new THREE.Mesh(rune2Geo, new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })); r2.rotation.x = -Math.PI / 2; r2.position.y = 0.08; r2.name = 'r2';
 			const crown = new THREE.Mesh(crownGeo, new THREE.MeshBasicMaterial({ color: 0xffd34d })); crown.name = 'crown';
 			grp.add(r1, r2, crown); grp.visible = false; this.scene.add(grp); this.auras.push(grp);
 		}
@@ -878,15 +867,16 @@ export class Battle {
 		const bc = this.emptyComp(), rc = this.emptyComp();
 		for (const u of this.units) {
 			if (u.dying > 0) continue;
-			if (u.team === 'bull') { bullCount++; bc[u.cls]++; if (!u.ranged) bullPower += u.dmg; }
-			else { bearCount++; rc[u.cls]++; if (!u.ranged) bearPower += u.dmg; }
+			if (u.team === 'bull') { bullCount++; bc[u.cls]++; bullPower += u.dmg * (u.ranged ? 0.6 : 1); }
+			else { bearCount++; rc[u.cls]++; bearPower += u.dmg * (u.ranged ? 0.6 : 1); }
 		}
 
 		if (this.phase === 'battle') {
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
 			const bias = THREE.MathUtils.clamp(this.momentum / 25, -1, 1) * FRONT_MAX * 0.35;
-			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.72 + bias, -FRONT_MAX, FRONT_MAX);
+			// 0.95 ≥ the 0.9 win threshold — total battlefield dominance can actually storm the base
+			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.95 + bias, -FRONT_MAX, FRONT_MAX);
 			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.6);
 			// a side reaches the enemy base → the theater falls
 			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
@@ -1193,7 +1183,8 @@ export class Battle {
 		}
 
 		this.updateAuras(dt);
-		this.composer.render(dt);
+		if (location.search.includes('nofx')) this.renderer.render(this.scene, this.camera);
+		else this.composer.render(dt);
 	}
 
 	private updateAuras(dt: number) {
