@@ -177,6 +177,8 @@
 					const c = e.cls === 'guardian' ? 'GUARDIAN' : e.cls.toUpperCase();
 					pushFeed(`◆ ${e.tier} ${c} AWAKENS — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
 					audio?.horn(!!e.god); if (e.god) doFlash();
+				} else if (e.type === 'duel') {
+					pushFeed(`◆ SINGLE COMBAT BEFORE THE HOSTS — ${e.tier}`, 'buy', '', true);
 				}
 			};
 			battle.onCampaign = (r) => {
@@ -296,7 +298,7 @@
 	</div>
 	<div class="top-right">
 		<div class="tally glass mono warphase" class:hot={stats.warPhase === 'charge' || stats.warPhase === 'melee'}>
-			{stats.warPhase === 'form' ? 'FORMING RANKS' : stats.warPhase === 'charge' ? 'CHARGE!' : stats.warPhase === 'melee' ? 'MELEE' : 'REGROUP'}
+			{stats.warPhase === 'form' ? 'FORMING RANKS' : stats.warPhase === 'advance' ? 'ADVANCING' : stats.warPhase === 'charge' ? 'CHARGE!' : stats.warPhase === 'melee' ? 'MELEE' : 'REGROUP'}
 		</div>
 		<div class="tally glass mono"><span class="dim">CAMPAIGN</span> <span class="gold">{stats.round}</span></div>
 		<div class="tally glass mono"><span class="green">{stats.winBull}W</span><span class="dim">WARS</span><span class="red">{stats.winBear}W</span></div>

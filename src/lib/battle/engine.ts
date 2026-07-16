@@ -12,7 +12,7 @@ export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian';
 export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number };
 
 export type BattleEvent = {
-	type: 'spawn' | 'kill' | 'legend';
+	type: 'spawn' | 'kill' | 'legend' | 'duel';
 	team: Team; tier: string; cls: Cls; wallet: string; usd: number; pct: number; god?: boolean;
 };
 
@@ -48,17 +48,20 @@ type Unit = {
 	lane: number; slot: number; row: number; frontJitter: number; flank: boolean;
 };
 
-// the war breathes in phases: dress ranks → sound the charge → melee → break and re-form
-export type WarPhase = 'form' | 'charge' | 'melee' | 'regroup';
-const PHASE_CYCLE = 21; // seconds per full rhythm
+// the war breathes like a real field battle:
+// FORM (dress ranks, champions duel between the hosts) → ADVANCE (walk forward in step under
+// massed volleys) → CHARGE (horns, final sprint) → MELEE (open fighting) → REGROUP (carry the
+// line back, re-dress, recover the wounded)
+export type WarPhase = 'form' | 'advance' | 'charge' | 'melee' | 'regroup';
+const PHASE_CYCLE = 47; // seconds per full rhythm — a slow, deliberate war
 function phaseAt(t: number): WarPhase {
 	const T = t % PHASE_CYCLE;
-	return T < 5 ? 'form' : T < 8 ? 'charge' : T < 17 ? 'melee' : 'regroup';
+	return T < 10 ? 'form' : T < 18 ? 'advance' : T < 21 ? 'charge' : T < 37 ? 'melee' : 'regroup';
 }
 
 // per-class attack pacing (seconds between strikes)
 const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, guardian: 2.4 };
-const KILL_TEMPO = 2.6; // global lethality multiplier (per-hit = dmg * cd * tempo)
+const KILL_TEMPO = 1.7; // global lethality multiplier (per-hit = dmg * cd * tempo) — fights last
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
 const MAX = 500;
@@ -70,7 +73,7 @@ const BOARD_W = 170;
 const BOARD_D = 132;
 const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
-const SPEED = 11;
+const SPEED = 8; // deliberate marching pace — the charge multiplier provides the sprint
 const UNIT_SCALE = 2.1;
 const CLASSES: Cls[] = ['spear', 'duelist', 'archer', 'guardian'];
 
@@ -320,6 +323,12 @@ export class Battle {
 	private wonUntil = 0;
 	private winsBull = 0; private winsBear = 0;
 	private warClock = 0; private battlePhase: WarPhase = 'form';
+	// massed archery: volleys loose together on a shared signal during the standoff phases
+	private volleyT = 3; private volleyWindow = 0;
+	// the first strike after the horns sound lands in slow motion
+	private awaitClash = false;
+	// single combat before the hosts — one champion from each side meets in no-man's land
+	private duelA: Unit | null = null; private duelB: Unit | null = null;
 	onCampaign: ((r: { winner: Team; campaign: number }) => void) | null = null;
 	private reinB = 0; private reinS = 0; private accB = 0; private accS = 0;
 	private killFx: { x: number; z: number; team: Team; until: number }[] = [];
@@ -836,7 +845,7 @@ export class Battle {
 		// aim at the target with slight scatter
 		const tx = t.x + (Math.random() - 0.5) * 1.6, tz = t.z + (Math.random() - 0.5) * 1.6, ty = hillY(tx) + 0.9;
 		const dist = Math.hypot(tx - sx, tz - sz);
-		const T = THREE.MathUtils.clamp(dist / 34, 0.35, 0.72), g = 18;
+		const T = THREE.MathUtils.clamp(dist / 30, 0.45, 0.95), g = 18; // high, slow arcs — volleys hang in the air
 		p.active = true; p.x = sx; p.y = sy; p.z = sz;
 		p.dmg = u.dmg * ATK_CD.archer * KILL_TEMPO * 0.6; p.team = u.team; p.life = T + 0.25;
 		p.vx = (tx - sx) / T; p.vz = (tz - sz) / T; p.vy = (ty - sy + 0.5 * g * T * T) / T;
@@ -855,7 +864,7 @@ export class Battle {
 				this.spawnBurst(p.x, hillY(p.x) + 0.6, p.z, p.team === 'bull' ? GOLD : CRIMSON, 4);
 				let best: Unit | null = null, bd = 9;
 				for (const e of this.units) { if (e.team === p.team || e.dying > 0) continue; const dx = e.x - p.x, dz = e.z - p.z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = e; } }
-				if (best) { best.hp -= p.dmg; best.struck = 0.16; if (best.hp <= 0) this.kill(best, []); }
+				if (best) { best.hp -= p.dmg * this.guardMul(best); best.struck = 0.16; if (best.hp <= 0) this.kill(best, []); }
 				this.dummy.scale.setScalar(0); this.dummy.updateMatrix(); this.arrowMesh.setMatrixAt(i, this.dummy.matrix); dirty = true;
 				continue;
 			}
@@ -912,7 +921,21 @@ export class Battle {
 
 	private step(dt: number) {
 		this.warClock += dt;
-		this.battlePhase = phaseAt(this.warClock);
+		const np = phaseAt(this.warClock);
+		if (np !== this.battlePhase) {
+			this.battlePhase = np;
+			if (np === 'form') this.beginDuel();
+			else if (np === 'advance') { this.duelA = null; this.duelB = null; } // champions rejoin the line
+			else if (np === 'charge') this.awaitClash = true;
+		}
+		// volley signal: during standoffs the archers loose together, every few breaths
+		this.volleyT -= dt;
+		if (this.volleyT <= 0) { this.volleyT = 4.5; this.volleyWindow = 0.5; }
+		else this.volleyWindow -= dt;
+		// a fallen (or removed) champion ends the single combat
+		if (this.duelA && (this.duelA.dying > 0 || this.duelA.hp <= 0)) this.duelA = null;
+		if (this.duelB && (this.duelB.dying > 0 || this.duelB.hp <= 0)) this.duelB = null;
+		if (!this.duelA || !this.duelB) { this.duelA = null; this.duelB = null; }
 		let bullPower = 0, bearPower = 0, bullCount = 0, bearCount = 0;
 		const bc = this.emptyComp(), rc = this.emptyComp();
 		for (const u of this.units) {
@@ -927,7 +950,7 @@ export class Battle {
 			const bias = THREE.MathUtils.clamp(this.momentum / 25, -1, 1) * FRONT_MAX * 0.35;
 			// 0.95 ≥ the 0.9 win threshold — total battlefield dominance can actually storm the base
 			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.95 + bias, -FRONT_MAX, FRONT_MAX);
-			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.6);
+			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.4);
 			// a side reaches the enemy base → the theater falls
 			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
 			else if (this.frontX < -FRONT_MAX * 0.9) this.winCampaign('bear');
@@ -946,11 +969,11 @@ export class Battle {
 		const bullsAlive: Unit[] = [], bearsAlive: Unit[] = [];
 		for (const u of this.units) if (u.dying <= 0) (u.team === 'bull' ? bullsAlive : bearsAlive).push(u);
 
-		const acquire = (u: Unit, range: number): Unit | null => {
+		const acquire = (u: Unit, range: number, rangedOnly = false): Unit | null => {
 			const foes = u.team === 'bull' ? bearsAlive : bullsAlive;
 			let best: Unit | null = null, bd = range * range;
 			for (const e of foes) {
-				if (e.dying > 0 || e.hp <= 0) continue;
+				if (e.dying > 0 || e.hp <= 0 || (rangedOnly && !e.ranged)) continue;
 				const dx = e.x - u.x, dz = e.z - u.z, d = dx * dx + dz * dz;
 				if (d < bd) { bd = d; best = e; }
 			}
@@ -984,10 +1007,15 @@ export class Battle {
 
 			// (re)acquire a real enemy to fight — how far we lock on breathes with the war rhythm
 			const wp = this.battlePhase;
-			const holding = wp === 'form' || wp === 'regroup';
-			if (u.retarget <= 0 || !u.target || u.target.hp <= 0 || u.target.dying > 0) {
-				const range = u.ranged ? 32 : wp === 'charge' ? 30 : wp === 'melee' ? ACQUIRE_R : 5;
-				u.target = acquire(u, range);
+			const holding = wp === 'form' || wp === 'advance' || wp === 'regroup';
+			const dueling = this.isDueling(u);
+			const shaken = u.hp < u.maxHp * 0.3; // badly wounded — falls back, fights only if pressed
+			if (dueling) {
+				u.target = u === this.duelA ? this.duelB : this.duelA;
+			} else if (u.retarget <= 0 || !u.target || u.target.hp <= 0 || u.target.dying > 0) {
+				const range = u.ranged ? 34 : shaken ? 5 : wp === 'charge' ? 30 : wp === 'melee' ? ACQUIRE_R : 5;
+				// flankers raid the enemy's archer line when the melee opens
+				u.target = (u.flank && wp === 'melee' ? acquire(u, 36, true) : null) || acquire(u, range);
 				u.retarget = 0.3 + Math.random() * 0.3;
 			}
 
@@ -1003,12 +1031,14 @@ export class Battle {
 				if (u.target && (u.target.dying > 0 || u.target.hp <= 0)) u.target = null;
 				if (u.target) {
 					desiredFace = Math.atan2(-(u.target.z - u.z), u.target.x - u.x);
-					if (u.atkCd <= 0) {
+					// fire-control: loose at will in the fray, but volley together during the standoff
+					const freeFire = wp === 'charge' || wp === 'melee';
+					if (u.atkCd <= 0 && (freeFire || this.volleyWindow > 0)) {
 						this.fireArrowAt(u, u.target); u.atkCd = ATK_CD.archer + Math.random() * 0.7;
 						u.strike = 0.3;
 					}
 				}
-			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0 && (!holding || this.inContact(u, u.target))) {
+			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0 && (dueling || !holding || this.inContact(u, u.target))) {
 				const t = u.target;
 				const dx = t.x - u.x, dz = t.z - u.z;
 				const dist = Math.hypot(dx, dz);
@@ -1025,13 +1055,15 @@ export class Battle {
 					if (u.atkCd <= 0) {
 						u.atkCd = ATK_CD[u.cls] * (0.9 + Math.random() * 0.2);
 						u.strike = 0.32;
+						// the first blow after the horns lands in slow motion — the lines have met
+						if (this.awaitClash) { this.awaitClash = false; this.slowmo = Math.max(this.slowmo, 0.8); this.shake = Math.min(1.4, this.shake + 0.5); }
 						const per = u.dmg * ATK_CD[u.cls] * KILL_TEMPO;
 						const col = u.team === 'bull' ? GOLD : CRIMSON;
 						this.spawnBurst(t.x, hillY(t.x) + 1.1, t.z, col, u.cls === 'guardian' ? 12 : 5);
 						// knockback
 						const kb = u.cls === 'guardian' ? 0.9 : 0.3;
 						t.x += (dx / Math.max(0.01, dist)) * kb; t.z += (dz / Math.max(0.01, dist)) * kb * 0.4;
-						t.hp -= per; t.struck = 0.16;
+						t.hp -= per * this.guardMul(t); t.struck = 0.16;
 						if (t.hp <= 0) this.kill(t, [u]);
 						// a guardian's great khopesh cleaves through nearby enemies
 						if (u.cls === 'guardian') {
@@ -1040,7 +1072,7 @@ export class Battle {
 							for (const e of foes) {
 								if (e === t || e.dying > 0 || e.hp <= 0) continue;
 								const ex = e.x - t.x, ez = e.z - t.z;
-								if (ex * ex + ez * ez < 2.4 * 2.4) { e.hp -= per * 0.55; e.struck = 0.16; if (e.hp <= 0) this.kill(e, [u]); if (++hits >= 3) break; }
+								if (ex * ex + ez * ez < 2.4 * 2.4) { e.hp -= per * 0.55 * this.guardMul(e); e.struck = 0.16; if (e.hp <= 0) this.kill(e, [u]); if (++hits >= 3) break; }
 							}
 							this.shake = Math.min(1.2, this.shake + 0.12);
 						}
@@ -1055,11 +1087,14 @@ export class Battle {
 				if (d > 1) { const st2 = Math.min(d, u.speed * 1.1 * dt); u.x += (dx / d) * st2; u.z += (dz / d) * st2; }
 				desiredFace = Math.atan2(-dz, dx);
 			} else {
-				// DRESS RANKS — hold a formation post behind the front; the charge presses the wall forward
+				// DRESS RANKS — hold a formation post behind the front. The hosts stand apart to
+				// form, walk forward together on the advance, and pour through on the charge.
 				u.melee = false;
-				if (holding) u.target = null;
-				const press = wp === 'charge' ? -3.5 : wp === 'melee' ? -0.5 : 0;
-				const fx2 = this.frontX + u.sign * (2.4 + u.row * 1.7 + press);
+				if (holding && !dueling) u.target = null;
+				const base = holding ? (wp === 'advance' ? 3.2 : 8) : 2.4;
+				const press = wp === 'charge' ? -5.5 : wp === 'melee' ? -0.5 : 0;
+				const rowEff = u.row + (shaken ? 4 : 0); // the wounded fall back through the ranks
+				const fx2 = this.frontX + u.sign * (base + rowEff * 1.7 + press);
 				const fz2 = THREE.MathUtils.clamp(u.slot, -ARENA_Z + 2, ARENA_Z - 2);
 				const ddx = fx2 - u.x, ddz = fz2 - u.z, dd = Math.hypot(ddx, ddz);
 				if (dd > 0.15) {
@@ -1123,6 +1158,33 @@ export class Battle {
 		this._bullPower = bullPower; this._bearPower = bearPower; this._bullCount = bullCount; this._bearCount = bearCount; this._bullComp = bc; this._bearComp = rc;
 	}
 
+	// choose each side's champion for single combat: highest tier, closest to the front
+	private pickChampion(team: Team): Unit | null {
+		let best: Unit | null = null, bs = -Infinity;
+		for (const u of this.units) {
+			if (u.team !== team || u.dying > 0 || u.hp <= 0 || u.ranged) continue;
+			const s = rankIdx(u.tier) * 10 - Math.abs(u.x - this.frontX) * 0.05 - Math.abs(u.z) * 0.02;
+			if (s > bs) { bs = s; best = u; }
+		}
+		return best;
+	}
+
+	private beginDuel() {
+		const a = this.pickChampion('bull'), b = this.pickChampion('bear');
+		if (!a || !b) return;
+		this.duelA = a; this.duelB = b;
+		this.onEvent?.({ type: 'duel', team: 'bull', tier: `${a.tier} vs ${b.tier}`, cls: a.cls, wallet: a.wallet, usd: 0, pct: 0 });
+	}
+
+	private isDueling(u: Unit): boolean { return u === this.duelA || u === this.duelB; }
+
+	// a dressed spearman keeps his great shield up between clashes — volleys glance off the wall
+	private guardMul(t: Unit): number {
+		if (t.cls !== 'spear') return 1;
+		const wp = this.battlePhase;
+		return wp === 'form' || wp === 'advance' || wp === 'regroup' ? 0.6 : 1;
+	}
+
 	// already blade-to-blade — you cannot disengage mid-fight to dress ranks
 	private inContact(u: Unit, t: Unit): boolean {
 		const dx = t.x - u.x, dz = t.z - u.z;
@@ -1145,7 +1207,7 @@ export class Battle {
 		for (const u of this.units) this.armies[`${u.team}:${u.cls}`].mesh.setMatrixAt(u.idx, this.dummy.matrix);
 		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
-		this.warClock = 0; // new campaign opens with both hosts forming ranks
+		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
 		this.spawnGarrison(this.lastGarrison.bulls, this.lastGarrison.bears);
 	}
 
@@ -1158,7 +1220,7 @@ export class Battle {
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;
 		this.totalKills++;
 		// each casualty physically shoves the front toward the loser's base
-		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? 0.12 : -0.12), -FRONT_MAX, FRONT_MAX);
+		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? 0.08 : -0.08), -FRONT_MAX, FRONT_MAX);
 		this.killFx.push({ x: u.x, z: u.z, team: u.team, until: performance.now() + 1200 });
 		if (this.killFx.length > 40) this.killFx.shift();
 		if (killers.length) { const killer = killers[(Math.random() * killers.length) | 0]; killer.kills++; if (killer.wallet) { const c = this.commanders.get(killer.wallet); if (c) c.kills++; } }
