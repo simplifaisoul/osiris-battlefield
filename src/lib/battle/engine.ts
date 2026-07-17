@@ -409,6 +409,14 @@ export class Battle {
 		this.buildAuras();
 
 		this.on(window, 'resize', () => this.resize());
+		// GPU resets (driver TDR, tab backgrounding) must not leave a dead canvas
+		this.on(canvas, 'webglcontextlost', (e) => e.preventDefault());
+		this.on(canvas, 'webglcontextrestored', () => {
+			this.composer.dispose();
+			this.buildComposer();
+			this.fxOk = true; this.fxChecked = false;
+			this.resize();
+		});
 		this.bindCamera(canvas);
 	}
 
@@ -419,8 +427,17 @@ export class Battle {
 
 	// ---------- pipeline ----------
 
+	// post-processing self-defence: if the composer can't produce a sane frame on this
+	// GPU/driver (no float render targets, broken pass → all-white output), drop to a
+	// direct render with built-in tone mapping instead of showing a white screen.
+	private fxOk = true; private fxChecked = false;
+
 	private buildComposer() {
-		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: THREE.HalfFloatType });
+		const gl = this.renderer.getContext();
+		const floatOk = this.renderer.capabilities.isWebGL2
+			? !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))
+			: !!gl.getExtension('OES_texture_half_float');
+		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: floatOk ? THREE.HalfFloatType : THREE.UnsignedByteType });
 		this.composer.addPass(new RenderPass(this.scene, this.camera));
 
 		// one lean pass: subtle bloom on true highlights, filmic tone map, gentle vignette
@@ -1401,8 +1418,45 @@ export class Battle {
 		}
 
 		this.updateAuras(dt);
-		if (location.search.includes('nofx')) this.renderer.render(this.scene, this.camera);
-		else this.composer.render(dt);
+		if (!this.fxOk || location.search.includes('nofx')) {
+			this.renderer.render(this.scene, this.camera);
+			return;
+		}
+		try {
+			this.composer.render(dt);
+		} catch {
+			this.disableFx();
+			this.renderer.render(this.scene, this.camera);
+			return;
+		}
+		// one-time sanity probe a few frames in: an all-white buffer means a broken pipeline
+		if (!this.fxChecked && this.frame > 12) {
+			this.fxChecked = true;
+			if (this.frameIsBlownOut()) this.disableFx();
+		}
+	}
+
+	private frameIsBlownOut(): boolean {
+		const gl = this.renderer.getContext();
+		const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+		if (!w || !h) return false;
+		const px = new Uint8Array(4);
+		for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.35], [0.75, 0.35], [0.3, 0.75], [0.7, 0.75]] as const) {
+			gl.readPixels((w * fx) | 0, (h * fy) | 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+			if (px[0] < 250 || px[1] < 250 || px[2] < 250) return false; // any normal pixel → frame is fine
+		}
+		return true;
+	}
+
+	private disableFx() {
+		if (!this.fxOk) return;
+		this.fxOk = false;
+		// direct rendering still gets filmic grading via the renderer itself
+		this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+		this.scene.traverse((o) => {
+			const mats = (o as THREE.Mesh).material;
+			for (const m of Array.isArray(mats) ? mats : mats ? [mats] : []) m.needsUpdate = true;
+		});
 	}
 
 	private updateAuras(dt: number) {
