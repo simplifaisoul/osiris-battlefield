@@ -5,7 +5,7 @@ import {
 	ToneMappingEffect, ToneMappingMode
 } from 'postprocessing';
 import { createNoise2D } from 'simplex-noise';
-import { tierForPct, GARRISON, type Tier } from './tiers';
+import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
 
 export type Team = 'bull' | 'bear';
 export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian';
@@ -858,7 +858,11 @@ export class Battle {
 
 	spawn(input: SpawnInput) {
 		const team: Team = input.kind === 'buy' || input.kind === 'bull' ? 'bull' : 'bear';
-		const tier = tierForPct(input.pct);
+		let tier = tierForPct(input.pct);
+		// on microcap tokens a few dollars can move 1% of supply — hold the top ranks to a
+		// dollar floor too, so GOD/TITAN spectacle stays rare enough to mean something
+		if (tier.name === 'GOD' && input.usd < 2000) tier = TIERS[1];
+		if (tier.name === 'TITAN' && input.usd < 400) tier = TIERS[2];
 		const god = tier.name === 'GOD';
 		const legend = god || tier.name === 'TITAN';
 		const cls = pickClass(tier.name, hash01(input.wallet + input.usd));

@@ -166,7 +166,6 @@
 			const { Battle } = await import('$lib/battle/engine');
 			if (!alive || !canvas) return;
 			battle = new Battle(canvas);
-			if (import.meta.env.DEV) (window as any).__battle = battle;
 			let lastWarPhase = 'form';
 			battle.onStats = (s) => {
 				if (s.warPhase === 'charge' && lastWarPhase !== 'charge' && s.phase === 'battle') audio?.horn(false);
