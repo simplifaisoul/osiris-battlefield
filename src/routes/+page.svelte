@@ -165,6 +165,7 @@
 			const { Battle } = await import('$lib/battle/engine');
 			if (!alive || !canvas) return;
 			battle = new Battle(canvas);
+			if (import.meta.env.DEV) (window as any).__battle = battle;
 			let lastWarPhase = 'form';
 			battle.onStats = (s) => {
 				if (s.warPhase === 'charge' && lastWarPhase !== 'charge' && s.phase === 'battle') audio?.horn(false);
@@ -283,6 +284,10 @@
 				<span class="dim">·</span>
 				<span class="pressure {marketPressure.c}">MARKET PRESSURE: {marketPressure.t}</span>
 				<span class="live-dot"></span><span class="red mono">LIVE</span>
+			</div>
+			<div class="frontbar" title="Front line — bulls vs bears">
+				<span class="fb-fill" style="width:{stats.frontPct}%"></span>
+				<span class="fb-marker" style="left:{stats.frontPct}%"></span>
 			</div>
 			<div class="tf-row mono">
 				<div class="tf-toggle">
@@ -432,7 +437,7 @@
 	.flash { position: fixed; inset: 0; z-index: 58; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(255,255,255,0.6), rgba(200,255,220,0.2) 60%, transparent 100%); animation: flashfade 0.65s ease-out forwards; }
 	@keyframes flashfade { from { opacity: 1; } to { opacity: 0; } }
 
-	.intro { position: fixed; inset: 0; z-index: 60; background: radial-gradient(circle at 50% 40%, rgba(14,20,12,0.7), rgba(4,6,4,0.96)); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; animation: rise 0.5s both; }
+	.intro { position: fixed; inset: 0; z-index: 60; background: radial-gradient(circle at 72% 18%, rgba(120,40,50,0.22), transparent 40%), radial-gradient(circle at 50% 40%, rgba(16,10,20,0.72), rgba(4,2,7,0.97)); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; animation: rise 0.5s both; }
 	.intro-inner { text-align: center; max-width: 580px; padding: 30px; }
 	.intro-eye { font-size: 66px; color: var(--green); text-shadow: 0 0 40px rgba(20,241,149,0.5); }
 	.intro-title { font-size: 44px; font-weight: 900; letter-spacing: 0.04em; margin: 12px 0 10px; color: #fff; }
@@ -459,10 +464,14 @@
 	.top-right { display: flex; align-items: center; gap: 10px; pointer-events: auto; width: 200px; justify-content: flex-end; }
 	.tally { display: flex; gap: 6px; padding: 10px 12px; font-size: 12px; font-weight: 700; }
 	.warphase { font-size: 10px; letter-spacing: 0.12em; color: var(--text-2); }
-	.warphase.hot { color: var(--gold); border-color: rgba(var(--gold-rgb), 0.45); text-shadow: 0 0 12px rgba(var(--gold-rgb), 0.5); }
+	.warphase.hot { color: var(--crimson); border-color: rgba(var(--crimson-rgb), 0.5); text-shadow: 0 0 14px rgba(var(--crimson-rgb), 0.6); animation: glowpulse 1.2s ease-in-out infinite; }
+	@keyframes glowpulse { 0%, 100% { box-shadow: 0 0 6px rgba(var(--crimson-rgb), 0.15); } 50% { box-shadow: 0 0 18px rgba(var(--crimson-rgb), 0.4); } }
 	.icon-btn { padding: 10px 12px; cursor: pointer; border: 1px solid var(--line); font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-2); }
 	.icon-btn:hover { color: var(--text); }
 
+	.frontbar { position: relative; width: 340px; height: 5px; margin: 9px auto 0; border-radius: 3px; overflow: visible; background: linear-gradient(90deg, rgba(20,241,149,0.15), rgba(255,59,78,0.2)); border: 1px solid var(--line-2); }
+	.fb-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: linear-gradient(90deg, rgba(20,241,149,0.55), rgba(20,241,149,0.85)); transition: width 0.4s ease; }
+	.fb-marker { position: absolute; top: -3px; width: 3px; height: 11px; border-radius: 2px; background: #fff; box-shadow: 0 0 8px rgba(255,255,255,0.8); transform: translateX(-50%); transition: left 0.4s ease; }
 	.tf-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; pointer-events: auto; }
 	.tf-toggle { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(8,10,8,0.55); border: 1px solid var(--line); backdrop-filter: blur(10px); }
 	.tf-btn { padding: 6px 13px; border-radius: 7px; border: none; background: none; cursor: pointer; font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: 0.06em; transition: all 0.15s; }
@@ -499,7 +508,7 @@
 
 	.feed { position: fixed; right: 22px; bottom: 66px; z-index: 10; width: 340px; padding: 10px 12px; }
 	.feed-head { display: flex; justify-content: space-between; font-size: 9px; letter-spacing: 0.15em; color: var(--text-3); margin-bottom: 8px; }
-	.feed-rows { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow: hidden; }
+	.feed-rows { display: flex; flex-direction: column; gap: 4px; max-height: 38vh; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent); mask-image: linear-gradient(to bottom, #000 72%, transparent); }
 	.feed-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 8px; border-left: 2px solid transparent; background: rgba(255,255,255,0.02); animation: slidein 0.3s both; }
 	.feed-row.buy { border-left-color: var(--green); }
 	.feed-row.sell { border-left-color: var(--crimson); }

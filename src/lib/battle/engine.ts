@@ -43,7 +43,7 @@ type Unit = {
 	tracked: boolean; legend: boolean; melee: boolean;
 	// duel state
 	target: Unit | null; retarget: number; atkCd: number; strike: number; face: number;
-	tint: number; struck: number;
+	tint: number; struck: number; swingSide: number;
 	// formation posting: quantized file (slot) across the field, rank depth (row) behind the front
 	lane: number; slot: number; row: number; frontJitter: number; flank: boolean;
 };
@@ -65,12 +65,12 @@ const KILL_TEMPO = 1.7; // global lethality multiplier (per-hit = dmg * cd * tem
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
 const MAX = 500;
-const FRONT_MAX = 44;
+const FRONT_MAX = 50;
 const CAP = FRONT_MAX + 19;
-const ARENA_Z = 48;
+const ARENA_Z = 54;
 // the battlefield is a bounded board floating in a dark void
-const BOARD_W = 170;
-const BOARD_D = 132;
+const BOARD_W = 200;
+const BOARD_D = 150;
 const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 8; // deliberate marching pace — the charge multiplier provides the sprint
@@ -121,10 +121,10 @@ function toonMaterial(): THREE.MeshToonMaterial {
 }
 
 type Palette = { cloth: string; clothDark: string; skin: string; metal: string; wood: string; leather: string; accent: string };
-// bronze-skinned warriors in team-coloured linen, khopesh blades in weathered bronze, gold everywhere
+// night-war hosts: deep emerald vs blood crimson linen, blackened bronze, firelight gold
 const PAL: Record<Team, Palette> = {
-	bull: { cloth: '#29d465', clothDark: '#189a4b', skin: '#c98d4f', metal: '#cf973c', wood: '#8a5a2b', leather: '#6b4a2f', accent: '#ffd34d' },
-	bear: { cloth: '#ff5560', clothDark: '#c22f3c', skin: '#b97e42', metal: '#cf973c', wood: '#7a4c22', leather: '#5c3c26', accent: '#ffd34d' }
+	bull: { cloth: '#1fc158', clothDark: '#0f7c39', skin: '#b57c40', metal: '#a97e30', wood: '#6e4722', leather: '#503722', accent: '#ffd34d' },
+	bear: { cloth: '#ef3a4e', clothDark: '#992031', skin: '#a56e36', metal: '#a97e30', wood: '#5e3a1c', leather: '#452c1c', accent: '#ffd34d' }
 };
 
 function paint(g: THREE.BufferGeometry, hex: string): THREE.BufferGeometry {
@@ -208,11 +208,17 @@ function buildSpearman(p: Palette): THREE.BufferGeometry {
 }
 
 function buildDuelist(p: Palette): THREE.BufferGeometry {
-	// twin-khopesh blade dancer — both sickle-swords raised
+	// twin-khopesh blade dancer — both sickle-swords raised, dark iron pauldron spikes
 	const parts = [...chunkyBase(p), ...armPair(p), ...khopesh(p, 1), ...khopesh(p, -1)];
 	// gold circlet with a rearing-serpent crest
 	const band = paint(new THREE.CylinderGeometry(0.41, 0.41, 0.1, 12), p.accent); band.translate(0, 1.7, 0.02);
 	const crest = paint(new THREE.ConeGeometry(0.07, 0.26, 6), p.accent); crest.translate(0, 1.86, 0.34);
+	// spiked shoulder studs — the blade dancer means harm
+	for (const s of [-1, 1]) {
+		const pad = paint(new THREE.SphereGeometry(0.17, 8, 6), '#33303c'); pad.translate(0.34 * s, 1.24, 0.02);
+		const spk = paint(new THREE.ConeGeometry(0.07, 0.3, 5), '#8f95a4'); spk.rotateZ(-0.7 * s); spk.translate(0.46 * s, 1.38, 0.02);
+		parts.push(pad, spk);
+	}
 	// flowing back scarf in team linen
 	const scarf = paint(new THREE.BoxGeometry(0.5, 0.85, 0.1), p.cloth); scarf.rotateX(0.3); scarf.translate(0, 0.98, -0.34);
 	parts.push(band, crest, scarf);
@@ -268,22 +274,33 @@ function buildArrowGeo(): THREE.BufferGeometry {
 function groundTexture(): THREE.Texture {
 	const c = document.createElement('canvas'); c.width = c.height = 512;
 	const x = c.getContext('2d')!;
-	x.fillStyle = '#b8b2a2'; x.fillRect(0, 0, 512, 512);
+	x.fillStyle = '#8e887c'; x.fillRect(0, 0, 512, 512);
 	for (let i = 0; i < 18000; i++) { const v = 150 + Math.random() * 80; x.fillStyle = `rgba(${v},${v - 6},${v - 20},${Math.random() * 0.4})`; x.fillRect(Math.random() * 512, Math.random() * 512, 2, 2); }
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
 }
 function skyTexture(): THREE.Texture {
+	// a black-metal night: violet-black void, dense stars, a pale blood moon
 	const c = document.createElement('canvas'); c.width = 512; c.height = 512;
 	const x = c.getContext('2d')!;
 	const g = x.createLinearGradient(0, 0, 0, 512);
-	g.addColorStop(0, '#04060a'); g.addColorStop(0.55, '#080d10'); g.addColorStop(0.85, '#0c1512'); g.addColorStop(1, '#0f1a14');
+	g.addColorStop(0, '#050309'); g.addColorStop(0.5, '#0a0510'); g.addColorStop(0.82, '#140911'); g.addColorStop(1, '#1a0c10');
 	x.fillStyle = g; x.fillRect(0, 0, 512, 512);
-	// faint starfield in the upper sky
-	for (let i = 0; i < 240; i++) {
-		const sx = Math.random() * 512, sy = Math.pow(Math.random(), 1.6) * 330;
-		x.fillStyle = `rgba(200,220,255,${0.08 + Math.random() * 0.4})`;
-		x.beginPath(); x.arc(sx, sy, 0.3 + Math.random() * 1.0, 0, Math.PI * 2); x.fill();
+	for (let i = 0; i < 340; i++) {
+		const sx = Math.random() * 512, sy = Math.pow(Math.random(), 1.5) * 360;
+		x.fillStyle = `rgba(210,205,255,${0.07 + Math.random() * 0.42})`;
+		x.beginPath(); x.arc(sx, sy, 0.3 + Math.random() * 1.1, 0, Math.PI * 2); x.fill();
 	}
+	// the blood moon — a pale disc ringed in dull crimson haze
+	const mx = 396, my = 92;
+	const halo = x.createRadialGradient(mx, my, 8, mx, my, 88);
+	halo.addColorStop(0, 'rgba(255,120,110,0.30)'); halo.addColorStop(0.4, 'rgba(160,50,60,0.12)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+	x.fillStyle = halo; x.fillRect(mx - 90, my - 90, 180, 180);
+	const disc = x.createRadialGradient(mx - 6, my - 6, 2, mx, my, 26);
+	disc.addColorStop(0, '#ffe9df'); disc.addColorStop(0.75, '#e8b5a4'); disc.addColorStop(1, '#b06a5e');
+	x.fillStyle = disc; x.beginPath(); x.arc(mx, my, 26, 0, Math.PI * 2); x.fill();
+	// faint craters
+	x.fillStyle = 'rgba(140,80,70,0.25)';
+	for (const [cx, cy, cr] of [[388, 84, 5], [404, 100, 4], [392, 102, 3], [408, 82, 2.5]] as const) { x.beginPath(); x.arc(cx, cy, cr, 0, Math.PI * 2); x.fill(); }
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 function radialTexture(hex: string): THREE.Texture {
@@ -368,7 +385,7 @@ export class Battle {
 		this.renderer.toneMapping = THREE.NoToneMapping;
 
 		this.scene.background = skyTexture();
-		this.scene.fog = new THREE.FogExp2(0x06090b, 0.0028);
+		this.scene.fog = new THREE.FogExp2(0x070409, 0.0022);
 
 		this.camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 700);
 		this.camera.position.set(0, 40, 60);
@@ -382,6 +399,7 @@ export class Battle {
 		this.capitalBear = this.buildCapital('bear', CAP);
 		this.frontLine = this.buildFrontLine();
 		this.buildGroundText();
+		this.buildMcapTicks();
 		this.buildMcapSign();
 		this.buildArmies();
 		this.buildArrows();
@@ -414,14 +432,14 @@ export class Battle {
 	}
 
 	private buildLights() {
-		this.scene.add(new THREE.HemisphereLight(0x8fb0d0, 0x1f2a18, 0.65));
-		const sun = new THREE.DirectionalLight(0xffe2b0, 2.3);
-		sun.position.set(-34, 62, 26); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
-		const s = 86; sun.shadow.camera.left = -s; sun.shadow.camera.right = s; sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s; sun.shadow.camera.far = 200; sun.shadow.bias = -0.0004;
-		this.scene.add(sun);
-		// cool rim from the far side so silhouettes pop against the dark board
-		const rim = new THREE.DirectionalLight(0x9fc8ff, 0.85);
-		rim.position.set(38, 34, -46);
+		// night war: cold moonlight key, ember underglow, blood-red rim
+		this.scene.add(new THREE.HemisphereLight(0x6a7abf, 0x1a1016, 0.55));
+		const moon = new THREE.DirectionalLight(0xbfd0ff, 1.9);
+		moon.position.set(-34, 62, 26); moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
+		const s = 100; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 220; moon.shadow.bias = -0.0004;
+		this.scene.add(moon);
+		const rim = new THREE.DirectionalLight(0xff5a4a, 0.75);
+		rim.position.set(38, 30, -46);
 		this.scene.add(rim);
 	}
 
@@ -431,9 +449,9 @@ export class Battle {
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
 		const colors = new Float32Array(pos.count * 3);
-		// moody war-map palette: bull grass vs bear dust, asphalt road, price gridlines
-		const bullSoil = new THREE.Color('#3e6a21'), bearSoil = new THREE.Color('#5e452a');
-		const asphalt = new THREE.Color('#3c3c38'), dash = new THREE.Color('#d8d8d0'), grid = new THREE.Color('#e9e2c2');
+		// night-war palette: darkened moor vs ash waste, black road, gold market-cap gridlines
+		const bullSoil = new THREE.Color('#2c4d1c'), bearSoil = new THREE.Color('#453322');
+		const asphalt = new THREE.Color('#26262a'), dash = new THREE.Color('#b8b4a8'), grid = new THREE.Color('#e8bb56');
 		const c = new THREE.Color();
 		for (let i = 0; i < pos.count; i++) {
 			const px = pos.getX(i), py = pos.getY(i);
@@ -448,9 +466,10 @@ export class Battle {
 			const patch = noise2D(px * 0.1, py * 0.1) * 0.5 + 0.5;
 			c.multiplyScalar(0.85 + patch * 0.3);
 			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.022);
-			// PRICE GRIDLINES: vertical ticks every 10 units — the terrain IS the mcap axis
-			const nearGrid = Math.abs(px - Math.round(px / 10) * 10);
-			if (nearGrid < 0.22 && Math.abs(Math.round(px / 10) * 10) <= 56) c.lerp(grid, 0.18);
+			// MARKET-CAP GRIDLINES: gold ticks every 8 units — the terrain IS the mcap axis
+			const nearGrid = Math.abs(px - Math.round(px / 8) * 8);
+			const gx = Math.round(px / 8) * 8;
+			if (nearGrid < 0.24 && Math.abs(gx) <= 48) c.lerp(grid, gx === 0 ? 0.5 : 0.26);
 			// horizontal ROAD across the whole map
 			const roadDist = Math.abs(py - ROAD_Z);
 			if (roadDist < 2.1) {
@@ -497,7 +516,7 @@ export class Battle {
 			parts.push(trunk, crown);
 		};
 		// palm groves across BOTH territories — clear of the road and the fighting lane
-		for (let i = 0; i < 170; i++) {
+		for (let i = 0; i < 220; i++) {
 			const x = rng(-BOARD_W / 2 + 6, BOARD_W / 2 - 6);
 			const z = rng(-BOARD_D / 2 + 6, BOARD_D / 2 - 6);
 			if (onRoad(z)) continue;
@@ -514,13 +533,32 @@ export class Battle {
 			const tip = paint(new THREE.ConeGeometry(0.4 * s, 0.6 * s, 4), '#ffd34d'); tip.rotateY(Math.PI / 4); tip.translate(x, y + 5.4 * s, z);
 			parts.push(base, shaft, tip);
 		};
-		for (const [ox, oz, os] of [[-38, 14.5, 1], [-38, 3.5, 1], [42, 14.5, 1.1], [42, 3.5, 1.1], [-66, -26, 0.8], [64, 32, 0.8]] as const) obeliskAt(ox, oz, os);
+		for (const [ox, oz, os] of [[-44, 14.5, 1], [-44, 3.5, 1], [48, 14.5, 1.1], [48, 3.5, 1.1], [-78, -30, 0.8], [76, 38, 0.8]] as const) obeliskAt(ox, oz, os);
 		const merged = mergeGeometries(parts, false)!; merged.computeVertexNormals();
 		const mesh = new THREE.Mesh(merged, toonMaterial()); mesh.castShadow = true; mesh.receiveShadow = true; this.scene.add(mesh);
 
-		// oases — flat translucent pools, one deep in each territory
-		const lakeMat = new THREE.MeshBasicMaterial({ color: 0x2f7fb8, transparent: true, opacity: 0.72 });
-		for (const [lx, lz, r] of [[-46, -34, 9], [52, 36, 10]] as const) {
+		// war-torches line the road and ring the capitals — self-lit embers against the night
+		const poles: THREE.BufferGeometry[] = [];
+		const flames: THREE.BufferGeometry[] = [];
+		const torchAt = (x: number, z: number) => {
+			const y = this.terrainH(x, z);
+			const pole = paint(new THREE.CylinderGeometry(0.09, 0.13, 2.6, 5), '#2e2318'); pole.translate(x, y + 1.3, z);
+			const cage = paint(new THREE.CylinderGeometry(0.24, 0.18, 0.3, 5), '#1c1712'); cage.translate(x, y + 2.7, z);
+			poles.push(pole, cage);
+			const fl = paint(new THREE.ConeGeometry(0.22, 0.62, 6), '#ffb14a'); fl.translate(x, y + 3.1, z);
+			const core = paint(new THREE.SphereGeometry(0.12, 6, 5), '#ffe6a0'); core.translate(x, y + 2.92, z);
+			flames.push(fl, core);
+		};
+		for (let tx = -72; tx <= 72; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
+		for (const cx of [-CAP, CAP]) for (const [dx, dz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]] as const) torchAt(cx + dx, dz);
+		const pm = mergeGeometries(poles, false)!; pm.computeVertexNormals();
+		this.scene.add(new THREE.Mesh(pm, toonMaterial()));
+		const fm = mergeGeometries(flames, false)!;
+		this.scene.add(new THREE.Mesh(fm, new THREE.MeshBasicMaterial({ vertexColors: true }))); // unlit — burns bright at night
+
+		// oases — dark moonlit pools, one deep in each territory
+		const lakeMat = new THREE.MeshBasicMaterial({ color: 0x1d4a68, transparent: true, opacity: 0.62 });
+		for (const [lx, lz, r] of [[-54, -40, 10], [60, 42, 11]] as const) {
 			const lake = new THREE.Mesh(new THREE.CircleGeometry(r, 24), lakeMat);
 			lake.rotation.x = -Math.PI / 2; lake.scale.y = 0.6; lake.position.set(lx, this.terrainH(lx, lz) + 0.12, lz);
 			this.scene.add(lake);
@@ -536,7 +574,7 @@ export class Battle {
 			const door = paint(new THREE.BoxGeometry(0.3, 0.5, 0.08), '#3a2a16'); door.translate(x, y + 0.25, z + 0.86);
 			vparts.push(base, roof, door);
 		};
-		for (const [vx, vz] of [[-64, 44], [62, -44], [-70, -38], [68, 40]] as const)
+		for (const [vx, vz] of [[-76, 52], [74, -52], [-84, -44], [80, 48]] as const)
 			for (let k = 0; k < 4; k++) houseAt(vx + rng(-4, 4), vz + rng(-4, 4), Math.random() < 0.5 ? '#d8c9a8' : '#c8ab7e');
 		const vm = mergeGeometries(vparts, false)!; vm.computeVertexNormals();
 		const vmesh = new THREE.Mesh(vm, toonMaterial()); vmesh.castShadow = true; this.scene.add(vmesh);
@@ -546,11 +584,11 @@ export class Battle {
 		const p = PAL[team];
 		const grp = new THREE.Group();
 		const parts: THREE.BufferGeometry[] = [];
-		// stepped temple
+		// obsidian ziggurat — black stone stepped in shadow, gold-trimmed, crowned in team fire
 		const steps = [ [14, 3.4], [10.5, 3.0], [7.4, 2.7], [4.6, 2.4] ] as const;
 		let y = 0;
 		steps.forEach(([w, h], i) => {
-			const b = paint(new THREE.BoxGeometry(w, h, w), i % 2 ? p.clothDark : p.cloth); b.translate(0, y + h / 2, 0); y += h;
+			const b = paint(new THREE.BoxGeometry(w, h, w), i % 2 ? '#211d2a' : '#2b2536'); b.translate(0, y + h / 2, 0); y += h;
 			parts.push(b);
 			const trim = paint(new THREE.BoxGeometry(w + 0.4, 0.3, w + 0.4), p.accent); trim.translate(0, y, 0); parts.push(trim);
 		});
@@ -586,6 +624,28 @@ export class Battle {
 		this.scene.add(mesh);
 		this.setPriceLabel('$OSIRIS', '');
 	}
+	// % tick labels along the far edge — each gold gridline is a market-cap level
+	private buildMcapTicks() {
+		for (let gx = -48; gx <= 48; gx += 16) {
+			if (gx === 0) continue;
+			const c = document.createElement('canvas'); c.width = 128; c.height = 48;
+			const x = c.getContext('2d')!;
+			x.textAlign = 'center'; x.textBaseline = 'middle';
+			x.font = '700 30px "JetBrains Mono", monospace';
+			x.fillStyle = gx > 0 ? 'rgba(122,255,176,0.85)' : 'rgba(255,138,149,0.85)';
+			x.fillText(`${gx > 0 ? '+' : ''}${gx}%`, 64, 24);
+			const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+			const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.75, depthWrite: false }));
+			sp.scale.set(6.4, 2.4, 1);
+			sp.position.set(gx, 1.6, -ARENA_Z - 7);
+			this.scene.add(sp);
+			// mirrored on the near edge for reads from every camera angle
+			const sp2 = sp.clone();
+			sp2.position.set(gx, 1.6, ARENA_Z + 9);
+			this.scene.add(sp2);
+		}
+	}
+
 	private mcapSprite!: THREE.Sprite;
 	private mcapCanvas!: HTMLCanvasElement;
 	private mcapTex!: THREE.CanvasTexture;
@@ -794,7 +854,7 @@ export class Battle {
 			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false,
 			target: null, retarget: Math.random() * 0.4, atkCd: Math.random() * 0.8, strike: 0,
 			face: sign < 0 ? 0 : Math.PI, // rotY that points local +x (weapon/barrel) at the enemy side
-			tint: 0.92 + Math.random() * 0.16, struck: 0,
+			tint: 0.92 + Math.random() * 0.16, struck: 0, swingSide: Math.random() < 0.5 ? 1 : -1,
 			lane: (Math.random() - 0.5) * ARENA_Z * 2,
 			// formation post: quantized file across the field, class decides the rank depth
 			slot: Math.round(((Math.random() - 0.5) * (ARENA_Z * 2 - 6)) / 2.6) * 2.6,
@@ -1049,12 +1109,15 @@ export class Battle {
 					const step = Math.min(dist - reach * 0.9, u.speed * (wp === 'charge' ? 1.7 : 1) * dt);
 					u.x += (dx / dist) * step; u.z += (dz / dist) * step;
 					u.melee = dist < reach * 3;
+					// dust kicked up under the charge
+					if (wp === 'charge' && Math.random() < dt * 1.4) this.spawnBurst(u.x, groundY(u.x, u.z) + 0.25, u.z, this.tmpColor.set(0x6b5c44) as THREE.Color, 2);
 				} else {
 					// in reach — strike on cooldown
 					u.melee = true;
 					if (u.atkCd <= 0) {
 						u.atkCd = ATK_CD[u.cls] * (0.9 + Math.random() * 0.2);
 						u.strike = 0.32;
+						u.swingSide = -u.swingSide; // duelists alternate blades, others shift their stance
 						// the first blow after the horns lands in slow motion — the lines have met
 						if (this.awaitClash) { this.awaitClash = false; this.slowmo = Math.max(this.slowmo, 0.8); this.shake = Math.min(1.4, this.shake + 0.5); }
 						const per = u.dmg * ATK_CD[u.cls] * KILL_TEMPO;
@@ -1263,10 +1326,12 @@ export class Battle {
 				const t = 1 - u.strike / 0.32; // 0 → 1 over the swing
 				const swing = t < 0.35 ? -t / 0.35 * 0.55 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'guardian' ? 0.95 : 0.7);
 				const lungeF = t < 0.35 ? 0 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'duelist' ? 0.7 : 0.4);
+				// duelists carve alternating diagonal arcs — left blade, then right
+				const roll = u.cls === 'duelist' ? Math.sin(t * Math.PI) * 0.5 * u.swingSide : 0;
 				const fx = Math.cos(u.face), fz = -Math.sin(u.face); // forward (local +x) from face angle
 				d.position.set(u.x + fx * lungeF, gy + Math.abs(Math.sin(u.bob * 2)) * 0.06 * u.scale, u.z + fz * lungeF);
 				d.scale.setScalar(s);
-				d.rotation.set(swing, u.face, 0);
+				d.rotation.set(swing, u.face, roll);
 			} else if (u.melee) {
 				// guard stance — tense bounce facing the enemy
 				d.position.set(u.x, gy + Math.abs(Math.sin(u.bob * 2.4)) * 0.07 * u.scale, u.z);
@@ -1274,10 +1339,19 @@ export class Battle {
 				d.rotation.set(0.06, u.face, Math.sin(u.bob * 3) * 0.05);
 			} else {
 				// march in step — the cadence ripples down the file like a drilled phalanx
+				const bp = this.battlePhase;
+				const braced = u.cls === 'spear' && (bp === 'form' || bp === 'advance' || bp === 'regroup');
 				const gait = Math.sin(u.ranged ? u.bob : this.time * 8.5 + u.slot * 0.35 + u.row * 0.9);
-				d.position.set(u.x, gy + Math.abs(gait) * 0.22 * u.scale, u.z);
-				d.scale.setScalar(s);
-				d.rotation.set(0.1, u.face, gait * 0.14);
+				if (braced) {
+					// shield wall: planted, leaning into the shield, barely swaying
+					d.position.set(u.x, gy + Math.abs(gait) * 0.05 * u.scale, u.z);
+					d.scale.setScalar(s);
+					d.rotation.set(0.16, u.face, gait * 0.03);
+				} else {
+					d.position.set(u.x, gy + Math.abs(gait) * 0.22 * u.scale, u.z);
+					d.scale.setScalar(s);
+					d.rotation.set(0.1, u.face, gait * 0.14);
+				}
 			}
 			d.updateMatrix(); mesh.setMatrixAt(u.idx, d.matrix); dirty.add(mesh);
 			// colour: hit-flash > tracked glow > base tint
@@ -1302,7 +1376,7 @@ export class Battle {
 			if (this.keys.has('s')) { this.panX += sy * spd; this.panZ += cy * spd; }
 			if (this.keys.has('a')) { this.panX -= cy * spd; this.panZ += sy * spd; }
 			if (this.keys.has('d')) { this.panX += cy * spd; this.panZ -= sy * spd; }
-			this.panX = THREE.MathUtils.clamp(this.panX, -74, 74); this.panZ = THREE.MathUtils.clamp(this.panZ, -58, 58);
+			this.panX = THREE.MathUtils.clamp(this.panX, -88, 88); this.panZ = THREE.MathUtils.clamp(this.panZ, -66, 66);
 		}
 
 		const target = this._camTarget.set(this.panX, 1, this.panZ);
