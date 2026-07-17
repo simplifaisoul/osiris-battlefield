@@ -12,7 +12,7 @@ export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian';
 export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number };
 
 export type BattleEvent = {
-	type: 'spawn' | 'kill' | 'legend' | 'duel';
+	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike';
 	team: Team; tier: string; cls: Cls; wallet: string; usd: number; pct: number; god?: boolean;
 };
 
@@ -74,7 +74,7 @@ const BOARD_D = 150;
 const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 8; // deliberate marching pace — the charge multiplier provides the sprint
-const UNIT_SCALE = 2.1;
+const UNIT_SCALE = 2.35;
 const CLASSES: Cls[] = ['spear', 'duelist', 'archer', 'guardian'];
 
 const CLASS_STATS: Record<Cls, { hpMul: number; dmgMul: number; scaleMul: number; ranged: boolean; standoff: number; speedMul: number }> = {
@@ -123,8 +123,8 @@ function toonMaterial(): THREE.MeshToonMaterial {
 type Palette = { cloth: string; clothDark: string; skin: string; metal: string; wood: string; leather: string; accent: string };
 // night-war hosts: deep emerald vs blood crimson linen, blackened bronze, firelight gold
 const PAL: Record<Team, Palette> = {
-	bull: { cloth: '#1fc158', clothDark: '#0f7c39', skin: '#b57c40', metal: '#a97e30', wood: '#6e4722', leather: '#503722', accent: '#ffd34d' },
-	bear: { cloth: '#ef3a4e', clothDark: '#992031', skin: '#a56e36', metal: '#a97e30', wood: '#5e3a1c', leather: '#452c1c', accent: '#ffd34d' }
+	bull: { cloth: '#2ce46e', clothDark: '#14a04a', skin: '#c98d4f', metal: '#c49238', wood: '#7e5228', leather: '#5c4028', accent: '#ffd34d' },
+	bear: { cloth: '#ff4256', clothDark: '#b52738', skin: '#b97e42', metal: '#c49238', wood: '#6e4522', leather: '#523524', accent: '#ffd34d' }
 };
 
 function paint(g: THREE.BufferGeometry, hex: string): THREE.BufferGeometry {
@@ -241,7 +241,7 @@ function buildArcher(p: Palette): THREE.BufferGeometry {
 function buildGuardian(p: Palette): THREE.BufferGeometry {
 	// WHALE AVATAR: jackal-headed guardian of the Duat — towering, gold-collared, great khopesh
 	const parts = [...chunkyBase(p), ...armPair(p)];
-	const dark = '#15151f';
+	const dark = '#4a4260'; // moonlit iron — dark, but never a black blob against the night field
 	// jackal skull, muzzle and tall ears over the head
 	const skull = paint(new THREE.BoxGeometry(0.56, 0.5, 0.54), dark); skull.translate(0, 1.66, 0.02);
 	const snout = paint(new THREE.BoxGeometry(0.22, 0.2, 0.46), dark); snout.translate(0, 1.56, 0.44);
@@ -274,8 +274,8 @@ function buildArrowGeo(): THREE.BufferGeometry {
 function groundTexture(): THREE.Texture {
 	const c = document.createElement('canvas'); c.width = c.height = 512;
 	const x = c.getContext('2d')!;
-	x.fillStyle = '#8e887c'; x.fillRect(0, 0, 512, 512);
-	for (let i = 0; i < 18000; i++) { const v = 150 + Math.random() * 80; x.fillStyle = `rgba(${v},${v - 6},${v - 20},${Math.random() * 0.4})`; x.fillRect(Math.random() * 512, Math.random() * 512, 2, 2); }
+	x.fillStyle = '#b0a996'; x.fillRect(0, 0, 512, 512);
+	for (let i = 0; i < 18000; i++) { const v = 165 + Math.random() * 80; x.fillStyle = `rgba(${v},${v - 6},${v - 20},${Math.random() * 0.4})`; x.fillRect(Math.random() * 512, Math.random() * 512, 2, 2); }
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
 }
 function skyTexture(): THREE.Texture {
@@ -356,7 +356,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.06; private camPitch = 0.68; private camZoom = 1.18;
+	private camYaw = 0.06; private camPitch = 0.46; private camZoom = 0.85;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
@@ -385,7 +385,7 @@ export class Battle {
 		this.renderer.toneMapping = THREE.NoToneMapping;
 
 		this.scene.background = skyTexture();
-		this.scene.fog = new THREE.FogExp2(0x070409, 0.0022);
+		this.scene.fog = new THREE.FogExp2(0x140a12, 0.0015);
 
 		this.camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 700);
 		this.camera.position.set(0, 40, 60);
@@ -440,22 +440,23 @@ export class Battle {
 		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: floatOk ? THREE.HalfFloatType : THREE.UnsignedByteType });
 		this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-		// one lean pass: subtle bloom on true highlights, filmic tone map, gentle vignette
-		const bloom = new BloomEffect({ intensity: 0.42, luminanceThreshold: 0.82, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.6 });
+		// one lean pass: neon bloom on emissives/tracers, filmic tone map, gentle vignette
+		const bloom = new BloomEffect({ intensity: 0.55, luminanceThreshold: 0.62, luminanceSmoothing: 0.3, mipmapBlur: true, radius: 0.65 });
 		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-		const vignette = new VignetteEffect({ offset: 0.24, darkness: 0.58 });
+		const vignette = new VignetteEffect({ offset: 0.22, darkness: 0.42 });
 		this.composer.addPass(new EffectPass(this.camera, bloom, tone, vignette));
 		this.composer.addPass(new EffectPass(this.camera, new SMAAEffect()));
 	}
 
 	private buildLights() {
-		// night war: cold moonlight key, ember underglow, blood-red rim
-		this.scene.add(new THREE.HemisphereLight(0x6a7abf, 0x1a1016, 0.55));
-		const moon = new THREE.DirectionalLight(0xbfd0ff, 1.9);
+		// night war: bright silver moonlight key over a cool ambient bed, blood-red rim.
+		// intensities are deliberately hot — the ACES pass pulls them back into a readable night.
+		this.scene.add(new THREE.HemisphereLight(0x8698d8, 0x4a3a30, 1.25));
+		const moon = new THREE.DirectionalLight(0xcfdcff, 2.8);
 		moon.position.set(-34, 62, 26); moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
 		const s = 100; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 220; moon.shadow.bias = -0.0004;
 		this.scene.add(moon);
-		const rim = new THREE.DirectionalLight(0xff5a4a, 0.75);
+		const rim = new THREE.DirectionalLight(0xff5a4a, 1.1);
 		rim.position.set(38, 30, -46);
 		this.scene.add(rim);
 	}
@@ -466,14 +467,16 @@ export class Battle {
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
 		const colors = new Float32Array(pos.count * 3);
-		// night-war palette: darkened moor vs ash waste, black road, gold market-cap gridlines
-		const bullSoil = new THREE.Color('#2c4d1c'), bearSoil = new THREE.Color('#453322');
-		const asphalt = new THREE.Color('#26262a'), dash = new THREE.Color('#b8b4a8'), grid = new THREE.Color('#e8bb56');
+		// night-war palette: moonlit moor vs ash waste, dark road, gold market-cap gridlines
+		const bullSoil = new THREE.Color('#4a7a30'), bearSoil = new THREE.Color('#6e5138');
+		const asphalt = new THREE.Color('#2e2e33'), dash = new THREE.Color('#c8c4b8'), grid = new THREE.Color('#ffd166');
 		const c = new THREE.Color();
 		for (let i = 0; i < pos.count; i++) {
 			const px = pos.getX(i), py = pos.getY(i);
 			const zTaper = THREE.MathUtils.clamp(1 - (Math.abs(py) - ARENA_Z) / 14, 0, 1);
-			const h = hillY(px) * zTaper + noise2D(px * 0.05, py * 0.05) * 0.35;
+			// fade the noise out at the board rim too — dips below the skirt read as black holes
+			const edge = THREE.MathUtils.clamp(Math.min((BOARD_W / 2 - Math.abs(px)) / 10, (BOARD_D / 2 - Math.abs(py)) / 10), 0, 1);
+			const h = hillY(px) * zTaper + noise2D(px * 0.05, py * 0.05) * 0.35 * edge;
 			pos.setZ(i, h);
 			// held territory split with a soft, noisy seam
 			const wob = noise2D(0.5, py * 0.06) * 3;
@@ -504,8 +507,10 @@ export class Battle {
 		geo.computeVertexNormals();
 		const g = new THREE.Mesh(geo, mat); g.rotation.x = -Math.PI / 2; g.receiveShadow = true; this.scene.add(g);
 		// dark board skirt so the map reads as a diorama floating in the void
-		const skirt = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, 3.4, BOARD_D), new THREE.MeshBasicMaterial({ color: 0x0a0d0a }));
-		skirt.position.y = -1.75; this.scene.add(skirt);
+		// top face sits below the terrain's deepest noise valley (−0.35) — if it pokes above,
+		// it occludes the ground from shallow camera angles and reads as black puddles
+		const skirt = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, 3.4, BOARD_D), new THREE.MeshBasicMaterial({ color: 0x181410 }));
+		skirt.position.y = -2.25; this.scene.add(skirt);
 		// soft pedestal glow beneath the floating diorama
 		const glow = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W * 2.1, BOARD_D * 2.3), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(70,120,95,0.5)'), transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
 		glow.rotation.x = -Math.PI / 2; glow.position.y = -3.6; this.scene.add(glow);
@@ -532,15 +537,16 @@ export class Battle {
 			const crown = paint(new THREE.SphereGeometry(0.16 * s, 6, 5), '#5a4020'); crown.translate(topX, topY, z);
 			parts.push(trunk, crown);
 		};
-		// palm groves across BOTH territories — clear of the road and the fighting lane
+		// palm groves across BOTH territories — clear of the road, the fighting lane, and the
+		// board rim (rim palms silhouette into black smudges against the night sky)
 		for (let i = 0; i < 220; i++) {
-			const x = rng(-BOARD_W / 2 + 6, BOARD_W / 2 - 6);
-			const z = rng(-BOARD_D / 2 + 6, BOARD_D / 2 - 6);
+			const x = rng(-BOARD_W / 2 + 15, BOARD_W / 2 - 15);
+			const z = rng(-BOARD_D / 2 + 13, BOARD_D / 2 - 13);
 			if (onRoad(z)) continue;
 			if (Math.abs(x) < CAP - 6 && Math.abs(z) < ARENA_Z - 4 && Math.random() < 0.82) continue;
 			const bull = x < 0;
-			const green = bull ? (Math.random() < 0.5 ? '#2f7e34' : '#3f9a3c') : (Math.random() < 0.5 ? '#6e7e2a' : '#8a7b2c');
-			palmAt(x, z, rng(0.8, 1.5), green);
+			const green = bull ? (Math.random() < 0.5 ? '#3d9a44' : '#4fb44c') : (Math.random() < 0.5 ? '#8a9a3a' : '#a8963c');
+			palmAt(x, z, rng(0.8, 1.4), green);
 		}
 		// obelisks flanking the road in each territory
 		const obeliskAt = (x: number, z: number, s: number) => {
@@ -641,19 +647,19 @@ export class Battle {
 		this.scene.add(mesh);
 		this.setPriceLabel('$OSIRIS', '');
 	}
-	// % tick labels along the far edge — each gold gridline is a market-cap level
+	// dollar tick labels along the field edges — the terrain is a live market-cap price
+	// ladder (NewHedge-style): every gold gridline is a real $ level around the current cap
+	private mcapTicks: { gx: number; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }[] = [];
+	private lastLadderMcap = 0;
 	private buildMcapTicks() {
 		for (let gx = -48; gx <= 48; gx += 16) {
 			if (gx === 0) continue;
-			const c = document.createElement('canvas'); c.width = 128; c.height = 48;
-			const x = c.getContext('2d')!;
-			x.textAlign = 'center'; x.textBaseline = 'middle';
-			x.font = '700 30px "JetBrains Mono", monospace';
-			x.fillStyle = gx > 0 ? 'rgba(122,255,176,0.85)' : 'rgba(255,138,149,0.85)';
-			x.fillText(`${gx > 0 ? '+' : ''}${gx}%`, 64, 24);
+			const c = document.createElement('canvas'); c.width = 192; c.height = 56;
 			const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-			const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.75, depthWrite: false }));
-			sp.scale.set(6.4, 2.4, 1);
+			this.mcapTicks.push({ gx, canvas: c, tex });
+			this.drawTick(gx, null);
+			const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.85, depthWrite: false }));
+			sp.scale.set(9.6, 2.8, 1);
 			sp.position.set(gx, 1.6, -ARENA_Z - 7);
 			this.scene.add(sp);
 			// mirrored on the near edge for reads from every camera angle
@@ -661,6 +667,28 @@ export class Battle {
 			sp2.position.set(gx, 1.6, ARENA_Z + 9);
 			this.scene.add(sp2);
 		}
+	}
+	private drawTick(gx: number, mcap: number | null) {
+		const t = this.mcapTicks.find((k) => k.gx === gx); if (!t) return;
+		const x = t.canvas.getContext('2d')!;
+		x.clearRect(0, 0, 192, 56);
+		x.textAlign = 'center'; x.textBaseline = 'middle';
+		const col = gx > 0 ? 'rgba(122,255,176,0.95)' : 'rgba(255,138,149,0.95)';
+		x.font = '700 15px "JetBrains Mono", monospace';
+		x.fillStyle = 'rgba(255,255,255,0.4)';
+		x.fillText(`${gx > 0 ? '+' : ''}${gx}%`, 96, 10);
+		x.font = '800 27px "JetBrains Mono", monospace';
+		x.fillStyle = col;
+		x.shadowColor = 'rgba(0,0,0,0.9)'; x.shadowBlur = 6;
+		x.fillText(mcap ? fmtUsdShort(mcap * (1 + gx / 100)) : '····', 96, 34);
+		x.shadowBlur = 0;
+		t.tex.needsUpdate = true;
+	}
+	// re-label the ladder from the live market cap (skips redraws under 0.5% moves)
+	setMcapLadder(mcap: number) {
+		if (!mcap || Math.abs(mcap - this.lastLadderMcap) / mcap < 0.005) return;
+		this.lastLadderMcap = mcap;
+		for (const t of this.mcapTicks) this.drawTick(t.gx, mcap);
 	}
 
 	private mcapSprite!: THREE.Sprite;
@@ -820,7 +848,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.68; this.camZoom = 1.18; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.46; this.camZoom = 0.85; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -851,6 +879,11 @@ export class Battle {
 		}
 		if (legend) { this.shake = Math.min(1.6, this.shake + (god ? 1.4 : 0.7)); if (god) this.slowmo = 1.1; }
 		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
+		// a whale entering the field calls down a sky strike on the enemy host
+		if (legend) {
+			this.skyStrike(team, god);
+			this.onEvent?.({ type: 'strike', team, tier: god ? 'GOD' : 'TITAN', cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
+		}
 	}
 
 	private addUnit(team: Team, cls: Cls, tier: Tier, wallet: string, legend: boolean, atFront: boolean): Unit | null {
@@ -914,6 +947,103 @@ export class Battle {
 		(this.souls.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true; (this.souls.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
 	}
 
+	// ---------- sky strikes (whale events) ----------
+
+	// TITAN buy/sell → a falcon comet dives on the enemy host; GOD → the Spear of Ra,
+	// a sky-beam that annihilates a knot of enemies. The market's biggest orders land
+	// as unmissable battlefield events, scaled like NewHedge's liquidation strikes.
+	private strikesFx: { mode: 'comet' | 'beam'; t: number; dur: number; sx: number; sy: number; sz: number; tx: number; ty: number; tz: number; team: Team; god: boolean; mesh: THREE.Mesh; hit: boolean }[] = [];
+
+	private skyStrike(team: Team, god: boolean) {
+		if (this.strikesFx.length >= 4) return;
+		const foes: Unit[] = [];
+		for (const u of this.units) if (u.team !== team && u.dying <= 0) foes.push(u);
+		if (!foes.length) return;
+		// aim at an enemy just behind the front, biased toward the thick of the host
+		const sign = team === 'bull' ? 1 : -1;
+		let best = foes[0], bd = Infinity;
+		for (const e of foes) {
+			const d = Math.abs(e.x - (this.frontX + sign * 7)) + Math.abs(e.z) * 0.25 + Math.random() * 9;
+			if (d < bd) { bd = d; best = e; }
+		}
+		const tx = best.x, tz = best.z, ty = groundY(tx, tz);
+		const col = team === 'bull' ? 0xffe08a : 0xff8a95;
+		if (god) {
+			const geo = new THREE.CylinderGeometry(1.7, 2.6, 90, 12, 1, true);
+			const mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+			const mesh = new THREE.Mesh(geo, mat);
+			mesh.position.set(tx, ty + 45, tz);
+			this.scene.add(mesh);
+			this.strikesFx.push({ mode: 'beam', t: 0, dur: 1.1, sx: tx, sy: ty + 45, sz: tz, tx, ty, tz, team, god, mesh, hit: false });
+		} else {
+			const geo = new THREE.OctahedronGeometry(0.9, 0); geo.scale(1, 2.6, 1);
+			const mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+			const mesh = new THREE.Mesh(geo, mat);
+			const sx = tx - sign * 42, sy = ty + 34, sz = tz + (Math.random() - 0.5) * 24;
+			mesh.position.set(sx, sy, sz);
+			this.scene.add(mesh);
+			this.strikesFx.push({ mode: 'comet', t: 0, dur: 0.55, sx, sy, sz, tx, ty, tz, team, god, mesh, hit: false });
+		}
+	}
+
+	private updateStrikes(dt: number) {
+		for (let i = this.strikesFx.length - 1; i >= 0; i--) {
+			const s = this.strikesFx[i];
+			s.t += dt;
+			const k = Math.min(1, s.t / s.dur);
+			if (s.mode === 'comet') {
+				// dive along a shallow arc, trailing embers
+				const x = THREE.MathUtils.lerp(s.sx, s.tx, k);
+				const y = THREE.MathUtils.lerp(s.sy, s.ty + 0.5, k * k);
+				const z = THREE.MathUtils.lerp(s.sz, s.tz, k);
+				s.mesh.position.set(x, y, z);
+				this.vTmp.set(s.tx - s.sx, (s.ty - s.sy) * 2 * k, s.tz - s.sz).normalize();
+				this.q.setFromUnitVectors(this.upV, this.vTmp);
+				s.mesh.quaternion.copy(this.q);
+				const c = s.team === 'bull' ? GOLD : CRIMSON;
+				for (let n = 0; n < 3; n++) {
+					const ti = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N;
+					this.sparkPos[ti * 3] = x + (Math.random() - 0.5); this.sparkPos[ti * 3 + 1] = y + (Math.random() - 0.5); this.sparkPos[ti * 3 + 2] = z + (Math.random() - 0.5);
+					this.sparkVel[ti * 3] = 0; this.sparkVel[ti * 3 + 1] = 1; this.sparkVel[ti * 3 + 2] = 0;
+					this.sparkLife[ti] = 0.25 + Math.random() * 0.2;
+					this.sparkColor[ti * 3] = c.r * 2; this.sparkColor[ti * 3 + 1] = c.g * 2; this.sparkColor[ti * 3 + 2] = c.b * 2;
+				}
+				if (k >= 1 && !s.hit) { s.hit = true; this.strikeImpact(s.team, s.tx, s.tz, false); }
+			} else {
+				// beam: flash in, hold, fade — impact lands as the beam reaches full burn
+				const op = k < 0.2 ? k / 0.2 : k > 0.7 ? (1 - k) / 0.3 : 1;
+				(s.mesh.material as THREE.MeshBasicMaterial).opacity = op * 0.85;
+				s.mesh.scale.x = s.mesh.scale.z = 0.7 + Math.sin(this.time * 30) * 0.12 + k * 0.5;
+				s.mesh.rotation.y += dt * 3;
+				if (k >= 0.25 && !s.hit) { s.hit = true; this.strikeImpact(s.team, s.tx, s.tz, true); }
+			}
+			if (k >= 1) {
+				this.scene.remove(s.mesh);
+				s.mesh.geometry.dispose();
+				(s.mesh.material as THREE.Material).dispose();
+				this.strikesFx.splice(i, 1);
+			}
+		}
+	}
+
+	private strikeImpact(team: Team, x: number, z: number, god: boolean) {
+		const col = team === 'bull' ? GOLD : CRIMSON;
+		this.spawnBurst(x, groundY(x, z) + 1, z, col, god ? 130 : 60);
+		this.addDecal(x, z, god ? 3 : 1.8);
+		this.shake = Math.min(2, this.shake + (god ? 1.5 : 0.8));
+		let hits = 0;
+		const maxHits = god ? 8 : 4, r2 = (god ? 9 : 6) ** 2, dmg = god ? 700 : 300;
+		for (const e of this.units) {
+			if (e.team === team || e.dying > 0) continue;
+			const dx = e.x - x, dz = e.z - z;
+			if (dx * dx + dz * dz < r2) {
+				e.hp -= dmg; e.struck = 0.2;
+				if (e.hp <= 0) this.kill(e, []);
+				if (++hits >= maxHits) break;
+			}
+		}
+	}
+
 	// ---------- projectiles ----------
 
 	private fireArrowAt(u: Unit, t: Unit) {
@@ -947,9 +1077,19 @@ export class Battle {
 			}
 			this.vTmp.set(p.vx, p.vy, p.vz).normalize();
 			this.q.setFromUnitVectors(this.upV, this.vTmp);
-			this.dummy.position.set(p.x, p.y, p.z); this.dummy.quaternion.copy(this.q); this.dummy.scale.setScalar(1.35); this.dummy.updateMatrix();
+			this.dummy.position.set(p.x, p.y, p.z); this.dummy.quaternion.copy(this.q); this.dummy.scale.setScalar(1.55); this.dummy.updateMatrix();
 			this.arrowMesh.setMatrixAt(i, this.dummy.matrix);
-			this.arrowMesh.setColorAt(i, this.tmpColor.copy(p.team === 'bull' ? GOLD : CRIMSON).lerp(new THREE.Color(0xffffff), 0.55));
+			// HDR tracer colour — pushes past 1.0 so the bloom pass streaks it across the night
+			this.arrowMesh.setColorAt(i, this.tmpColor.copy(p.team === 'bull' ? GOLD : CRIMSON).lerp(new THREE.Color(0xffffff), 0.4).multiplyScalar(2.4));
+			// short-lived ember trail behind each shaft
+			if (Math.random() < 0.45) {
+				const ti = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N;
+				this.sparkPos[ti * 3] = p.x; this.sparkPos[ti * 3 + 1] = p.y; this.sparkPos[ti * 3 + 2] = p.z;
+				this.sparkVel[ti * 3] = 0; this.sparkVel[ti * 3 + 1] = 0.4; this.sparkVel[ti * 3 + 2] = 0;
+				this.sparkLife[ti] = 0.14 + Math.random() * 0.1;
+				const tc = p.team === 'bull' ? GOLD : CRIMSON;
+				this.sparkColor[ti * 3] = tc.r * 1.6; this.sparkColor[ti * 3 + 1] = tc.g * 1.6; this.sparkColor[ti * 3 + 2] = tc.b * 1.6;
+			}
 			dirty = true;
 		}
 		if (dirty) { this.arrowMesh.instanceMatrix.needsUpdate = true; if (this.arrowMesh.instanceColor) this.arrowMesh.instanceColor.needsUpdate = true; }
@@ -977,6 +1117,7 @@ export class Battle {
 
 		this.step(simDt);
 		this.updateArrows(simDt);
+		this.updateStrikes(simDt);
 		this.updateParticles(simDt);
 		this.updateDecals(simDt);
 		this.render(dt);
@@ -1513,3 +1654,10 @@ export class Battle {
 }
 
 function rankIdx(t: string): number { return ['GARRISON', 'SOLDIER', 'ELITE', 'CHAMPION', 'TITAN', 'GOD'].indexOf(t); }
+
+function fmtUsdShort(n: number): string {
+	if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+	if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+	if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
+	return '$' + n.toFixed(0);
+}

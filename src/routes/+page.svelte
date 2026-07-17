@@ -98,6 +98,7 @@
 			if (r.ok) {
 				token = await r.json();
 				battle?.setSupply(token.supply);
+				battle?.setMcapLadder(token.marketCap);
 				battle?.setPriceLabel(fmtPrice(token.priceUsd), '$OSIRIS · CURRENT PRICE');
 				document.title = `${fmtUsd(token.marketCap)} · $OSIRIS Battlefield`;
 				applyTf();
@@ -180,6 +181,9 @@
 					audio?.horn(!!e.god); if (e.god) doFlash();
 				} else if (e.type === 'duel') {
 					pushFeed(`◆ SINGLE COMBAT BEFORE THE HOSTS — ${e.tier}`, 'buy', '', true);
+				} else if (e.type === 'strike') {
+					const hit = e.team === 'bull' ? 'THE BEARS' : 'THE BULLS';
+					pushFeed(e.god ? `☀ SPEAR OF RA ANNIHILATES ${hit}` : `𓅃 FALCON OF HORUS DIVES ON ${hit}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
 				}
 			};
 			battle.onCampaign = (r) => {
