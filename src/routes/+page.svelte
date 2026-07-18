@@ -120,7 +120,7 @@
 				if (seen.has(t.tx)) continue;
 				seen.add(t.tx);
 				const pct = pctOf(t.amount);
-				battle?.spawn({ wallet: t.wallet, kind: t.kind, usd: t.usd, pct });
+				battle?.spawn({ wallet: t.wallet, kind: t.kind, usd: t.usd, pct, quiet: seed });
 				if (!seed) {
 					const whale = pct >= 0.25, large = t.usd >= 300;
 					const price = token?.priceUsd ? fmtPrice(token.priceUsd) : '';

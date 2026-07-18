@@ -9,7 +9,7 @@ import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
 
 export type Team = 'bull' | 'bear';
 export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian' | 'chariot';
-export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number };
+export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number; quiet?: boolean };
 
 export type BattleEvent = {
 	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike' | 'volley';
@@ -789,7 +789,7 @@ export class Battle {
 		const GATE = FRONT_MAX * 0.9;
 		const mkGate = (x: number, hex: number, label: string, css: string) => {
 			const gm = new THREE.Mesh(new THREE.PlaneGeometry(1.5, span), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,255,255,0.9)'), color: hex, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false }));
-			gm.rotation.x = -Math.PI / 2; gm.position.set(x, 0.07, 0); this.scene.add(gm); this.gates.push(gm);
+			gm.rotation.x = -Math.PI / 2; gm.position.set(x, hillY(x) + 0.18, 0); this.scene.add(gm); this.gates.push(gm);
 			const c = document.createElement('canvas'); c.width = 320; c.height = 64;
 			const g2 = c.getContext('2d')!;
 			g2.textAlign = 'center'; g2.textBaseline = 'middle'; g2.font = '700 30px "JetBrains Mono", monospace';
@@ -856,11 +856,20 @@ export class Battle {
 		x.shadowBlur = 0;
 		t.tex.needsUpdate = true;
 	}
-	// re-label the ladder from the live market cap (skips redraws under 0.5% moves)
+	// the ladder is FIXED for the duration of a campaign (NewHedge's fixed price
+	// increments): it anchors at the cap when the round opens, and the live mcap
+	// marker rides across it. A new campaign re-bases the ladder at the latest cap.
+	private liveMcap = 0;
 	setMcapLadder(mcap: number) {
-		if (!mcap || Math.abs(mcap - this.lastLadderMcap) / mcap < 0.005) return;
-		this.lastLadderMcap = mcap;
-		for (const t of this.mcapTicks) this.drawTick(t.gx, mcap);
+		if (!mcap) return;
+		const first = !this.liveMcap;
+		this.liveMcap = mcap;
+		if (first) this.rebaseLadder();
+	}
+	private rebaseLadder() {
+		if (!this.liveMcap) return;
+		this.lastLadderMcap = this.liveMcap;
+		for (const t of this.mcapTicks) this.drawTick(t.gx, this.liveMcap);
 	}
 
 	private mcapSprite!: THREE.Sprite;
@@ -1035,7 +1044,16 @@ export class Battle {
 	// ---------- public API ----------
 
 	setSupply(_s: number) {}
-	setMomentum(m: number) { this.momentum = m; }
+	// each campaign is a price-range battle anchored at its opening move: the front reads
+	// (momentum − anchor), so a won theater resets to a fresh fight instead of instantly
+	// re-storming the gate while the timeframe change stays pumped. Timeframe switches
+	// shift the anchor by the jump so the front never teleports.
+	private momentumAnchor = 0; private anchorReady = false;
+	setMomentum(m: number) {
+		if (!this.anchorReady) { this.momentumAnchor = m; this.anchorReady = true; }
+		else if (Math.abs(m - this.momentum) > 20) this.momentumAnchor += m - this.momentum;
+		this.momentum = m;
+	}
 	// continuous garrison reinforcements/sec per side — scales with the selected timeframe's txn rate
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
@@ -1074,6 +1092,8 @@ export class Battle {
 			this.commanders.set(input.wallet, c);
 			if (input.usd > this.biggestWhaleUsd) { this.biggestWhaleUsd = input.usd; this.biggestWhaleWallet = input.wallet; }
 		}
+		// quiet spawns replay history on page load — units muster without the fireworks
+		if (input.quiet) return;
 		if (legend) { this.shake = Math.min(1.6, this.shake + (god ? 1.4 : 0.7)); if (god) this.slowmo = 1.1; }
 		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
 		// a whale entering the field calls down a sky strike on the enemy host
@@ -1125,7 +1145,13 @@ export class Battle {
 		});
 		this.composer.dispose(); this.renderer.dispose();
 	}
-	private resize() { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer.setSize(innerWidth, innerHeight); }
+	private resize() {
+		// a minimized/hidden window reports 0×0 — applying it would NaN the camera
+		// aspect and leave a dead canvas. Keep the last good size instead.
+		if (!innerWidth || !innerHeight) return;
+		this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix();
+		this.renderer.setSize(innerWidth, innerHeight); this.composer.setSize(innerWidth, innerHeight);
+	}
 
 	// ---------- particles ----------
 
@@ -1328,6 +1354,8 @@ export class Battle {
 			if (this.fpsAvg < 45 && this.quality > 0) this.applyQuality(this.quality - 1);
 			else if (this.fpsAvg > 58 && this.quality < 2) this.applyQuality(this.quality + 1);
 		}
+		// self-heal a canvas that got sized while the window reported 0×0
+		if (this.frame % 60 === 0 && this.renderer.domElement.width === 0 && innerWidth > 0 && innerHeight > 0) this.resize();
 		this.slowmo = Math.max(0, this.slowmo - rawDt);
 		this.timeScale += ((this.slowmo > 0 ? 0.32 : 1) - this.timeScale) * Math.min(1, rawDt * 6);
 		const simDt = dt * this.timeScale;
@@ -1383,9 +1411,9 @@ export class Battle {
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
 			// PRICE IS THE PRIMARY DRIVER (NewHedge rule: "when price moves higher, the
-			// bulls advance toward higher markers"). The timeframe's % move places the
-			// front on the mcap ladder; the fighting on the field modulates around it.
-			const priceTerm = THREE.MathUtils.clamp(this.momentum / 40, -1, 1) * FRONT_MAX * 0.8;
+			// bulls advance toward higher markers"). The move since this campaign opened
+			// places the front on the mcap ladder; the fighting modulates around it.
+			const priceTerm = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 40, -1, 1) * FRONT_MAX * 0.8;
 			const target = THREE.MathUtils.clamp(priceTerm + delta * FRONT_MAX * 0.45, -FRONT_MAX, FRONT_MAX);
 			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.4);
 			// a side reaches the enemy base → the theater falls
@@ -1603,6 +1631,8 @@ export class Battle {
 			this.bufWS += (ws - this.bufWS) * Math.min(1, dt * 1.5);
 			this.bufBull.scale.x = this.bufWB; this.bufBull.position.x = this.frontX - this.bufWB / 2 - 1;
 			this.bufBear.scale.x = -this.bufWS; this.bufBear.position.x = this.frontX + this.bufWS / 2 + 1;
+			// ride the hill — a flat y would sink these under the terrain at mid-field
+			this.bufBull.position.y = this.bufBear.position.y = hillY(this.frontX) + 0.1;
 		}
 		// the gates breathe — brighter as the front closes in on them
 		for (let gi = 0; gi < this.gates.length; gi++) {
@@ -1667,6 +1697,9 @@ export class Battle {
 		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
 		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
+		// the next price-range battle opens around the latest price
+		this.momentumAnchor = this.momentum;
+		this.rebaseLadder();
 		this.spawnGarrison(this.lastGarrison.bulls, this.lastGarrison.bears);
 	}
 

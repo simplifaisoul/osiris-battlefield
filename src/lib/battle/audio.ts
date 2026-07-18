@@ -206,7 +206,8 @@ export class WarAudio {
 	}
 
 	private impact(vol: number) {
-		if (!this.ctx || !this.master || !this.noise || this.muted) return;
+		// deferred by setTimeout from strike() — the context may have closed since
+		if (!this.ctx || this.ctx.state === 'closed' || !this.master || !this.noise || this.muted) return;
 		const t = this.ctx.currentTime;
 		const o = this.ctx.createOscillator();
 		const g = this.ctx.createGain();
