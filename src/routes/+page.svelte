@@ -115,6 +115,7 @@
 			let b = 0, s = 0;
 			for (const t of trades.slice(0, 40)) (t.kind === 'buy' ? (b += t.usd) : (s += t.usd));
 			buyUsd = b; sellUsd = s;
+			battle?.setPressure(b, s); // live tape drives the front-line liquidity buffers
 			for (const t of [...trades].reverse()) {
 				if (seen.has(t.tx)) continue;
 				seen.add(t.tx);

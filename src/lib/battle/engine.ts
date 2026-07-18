@@ -436,6 +436,15 @@ function radialTexture(hex: string): THREE.Texture {
 	x.fillStyle = g; x.fillRect(0, 0, 128, 128);
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
+// horizontal gradient, transparent at x=0 → solid at x=1 (for the front-line liquidity buffer)
+function edgeGradTexture(r: number, g: number, b: number): THREE.Texture {
+	const c = document.createElement('canvas'); c.width = 64; c.height = 8;
+	const x = c.getContext('2d')!;
+	const grad = x.createLinearGradient(0, 0, 64, 0);
+	grad.addColorStop(0, `rgba(${r},${g},${b},0)`); grad.addColorStop(0.75, `rgba(${r},${g},${b},0.3)`); grad.addColorStop(1, `rgba(${r},${g},${b},0.6)`);
+	x.fillStyle = grad; x.fillRect(0, 0, 64, 8);
+	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
 
 export class Battle {
 	private renderer: THREE.WebGLRenderer;
@@ -534,6 +543,7 @@ export class Battle {
 		this.buildArrows();
 		this.buildSparks();
 		this.buildSouls();
+		this.buildSmoke();
 		this.buildDecals();
 		this.buildAuras();
 
@@ -760,11 +770,44 @@ export class Battle {
 		return grp;
 	}
 
+	// liquidity buffer: tinted glow flanking the front, wider on the side with more
+	// live tape flow behind it (NewHedge's bid/ask buffer shading)
+	private bufBull!: THREE.Mesh; private bufBear!: THREE.Mesh;
+	private presB = 0; private presS = 0; private bufWB = 8; private bufWS = 8;
+	private gates: THREE.Mesh[] = [];
+
 	private buildFrontLine(): THREE.Mesh {
+		const span = ARENA_Z * 2 + 12;
+		const mkBuf = (r: number, g: number, b: number) => {
+			const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, span), new THREE.MeshBasicMaterial({ map: edgeGradTexture(r, g, b), transparent: true, opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+			mesh.rotation.x = -Math.PI / 2; mesh.position.y = 0.05; this.scene.add(mesh); return mesh;
+		};
+		this.bufBull = mkBuf(30, 210, 120);
+		this.bufBear = mkBuf(235, 70, 86);
+		this.bufBear.scale.x = -1; // mirror: gradient builds toward the front from the bear side
+		// victory gates — breach the enemy's gate and the theater falls
+		const GATE = FRONT_MAX * 0.9;
+		const mkGate = (x: number, hex: number, label: string, css: string) => {
+			const gm = new THREE.Mesh(new THREE.PlaneGeometry(1.5, span), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,255,255,0.9)'), color: hex, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false }));
+			gm.rotation.x = -Math.PI / 2; gm.position.set(x, 0.07, 0); this.scene.add(gm); this.gates.push(gm);
+			const c = document.createElement('canvas'); c.width = 320; c.height = 64;
+			const g2 = c.getContext('2d')!;
+			g2.textAlign = 'center'; g2.textBaseline = 'middle'; g2.font = '700 30px "JetBrains Mono", monospace';
+			g2.shadowColor = css; g2.shadowBlur = 14; g2.fillStyle = css; g2.fillText(label, 160, 32);
+			const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+			const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.85, depthWrite: false }));
+			sp.scale.set(15, 3, 1); sp.position.set(x, 3.4, -ARENA_Z - 4); this.scene.add(sp);
+			const sp2 = sp.clone(); sp2.position.set(x, 3.4, ARENA_Z + 6); this.scene.add(sp2);
+		};
+		mkGate(-GATE, 0x2fd66b, 'GATE OF HORUS', '#7dffb0');
+		mkGate(GATE, 0xff5560, 'GATE OF SET', '#ff8a95');
 		// crisp glowing seam instead of a wide haze column
-		const m = new THREE.Mesh(new THREE.PlaneGeometry(2.2, ARENA_Z * 2 + 12), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,244,200,0.9)'), color: 0xfff2c0, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false }));
+		const m = new THREE.Mesh(new THREE.PlaneGeometry(2.2, span), new THREE.MeshBasicMaterial({ map: radialTexture('rgba(255,244,200,0.9)'), color: 0xfff2c0, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false }));
 		m.rotation.x = -Math.PI / 2; m.position.y = 0.06; this.scene.add(m); return m;
 	}
+
+	// live tape pressure from the page — drives the buffer widths
+	setPressure(buyUsd: number, sellUsd: number) { this.presB = buyUsd; this.presS = sellUsd; }
 
 	private priceTex!: THREE.CanvasTexture;
 	private priceCanvas!: HTMLCanvasElement;
@@ -897,6 +940,26 @@ export class Battle {
 		this.sparks = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,255,255,0.95)'), size: 0.55, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, alphaTest: 0.35 }));
 		this.sparks.frustumCulled = false; this.scene.add(this.sparks);
 	}
+	private smoke!: THREE.Points; private smokePos!: Float32Array; private smokeVel!: Float32Array; private smokeLife!: Float32Array; private smokeMax!: Float32Array; private smokeColor!: Float32Array; private smokeHead = 0; private SMOKE_N = 240;
+	private buildSmoke() {
+		const N = this.SMOKE_N; this.smokePos = new Float32Array(N * 3); this.smokeColor = new Float32Array(N * 3); this.smokeVel = new Float32Array(N * 3); this.smokeLife = new Float32Array(N); this.smokeMax = new Float32Array(N);
+		for (let i = 0; i < N; i++) this.smokePos[i * 3 + 1] = -999;
+		const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(this.smokePos, 3)); g.setAttribute('color', new THREE.BufferAttribute(this.smokeColor, 3));
+		// normal-blended dark puffs — battle smoke drifting off the impacts
+		this.smoke = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(190,180,170,0.55)'), size: 3.4, vertexColors: true, transparent: true, opacity: 0.42, depthWrite: false, alphaTest: 0.02 }));
+		this.smoke.frustumCulled = false; this.scene.add(this.smoke);
+	}
+	private spawnSmoke(x: number, y: number, z: number, n: number) {
+		for (let k = 0; k < n; k++) {
+			const i = this.smokeHead; this.smokeHead = (this.smokeHead + 1) % this.SMOKE_N;
+			this.smokePos[i * 3] = x + (Math.random() - 0.5) * 2.4; this.smokePos[i * 3 + 1] = y + Math.random() * 0.8; this.smokePos[i * 3 + 2] = z + (Math.random() - 0.5) * 2.4;
+			this.smokeVel[i * 3] = (Math.random() - 0.5) * 1.1; this.smokeVel[i * 3 + 1] = 1.1 + Math.random() * 1.3; this.smokeVel[i * 3 + 2] = (Math.random() - 0.5) * 1.1;
+			const l = 1.6 + Math.random() * 1.6; this.smokeLife[i] = l; this.smokeMax[i] = l;
+			const v = 0.16 + Math.random() * 0.1;
+			this.smokeColor[i * 3] = v; this.smokeColor[i * 3 + 1] = v * 0.92; this.smokeColor[i * 3 + 2] = v * 0.82;
+		}
+	}
+
 	private buildSouls() {
 		const N = this.SOUL_N; this.soulPos = new Float32Array(N * 3); this.soulColor = new Float32Array(N * 3); this.soulVel = new Float32Array(N * 3); this.soulLife = new Float32Array(N);
 		for (let i = 0; i < N; i++) this.soulPos[i * 3 + 1] = -999;
@@ -1079,6 +1142,19 @@ export class Battle {
 		const sp = this.soulPos, sv = this.soulVel, sl = this.soulLife;
 		for (let i = 0; i < this.SOUL_N; i++) { if (sl[i] <= 0) continue; sl[i] -= dt; sp[i * 3] += sv[i * 3] * dt + Math.sin(this.time * 2 + i) * 0.01; sp[i * 3 + 1] += sv[i * 3 + 1] * dt; sp[i * 3 + 2] += sv[i * 3 + 2] * dt; if (sl[i] <= 0) sp[i * 3 + 1] = -999; }
 		(this.souls.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true; (this.souls.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
+		// smoke: drift up and sideways, darken into the night as it dies
+		const mp = this.smokePos, mv = this.smokeVel, ml = this.smokeLife, mm = this.smokeMax, mc = this.smokeColor;
+		for (let i = 0; i < this.SMOKE_N; i++) {
+			if (ml[i] <= 0) continue;
+			ml[i] -= dt;
+			mp[i * 3] += mv[i * 3] * dt; mp[i * 3 + 1] += mv[i * 3 + 1] * dt; mp[i * 3 + 2] += mv[i * 3 + 2] * dt;
+			mv[i * 3 + 1] = Math.max(0.25, mv[i * 3 + 1] - dt * 0.5);
+			const k = Math.max(0, ml[i] / mm[i]);
+			const v = (0.16 + 0.1) * k * k; // quadratic fade toward black = smoke thinning out
+			mc[i * 3] = v; mc[i * 3 + 1] = v * 0.92; mc[i * 3 + 2] = v * 0.82;
+			if (ml[i] <= 0) mp[i * 3 + 1] = -999;
+		}
+		(this.smoke.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true; (this.smoke.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
 	}
 
 	// ---------- sky strikes (whale events) ----------
@@ -1163,6 +1239,7 @@ export class Battle {
 	private strikeImpact(team: Team, x: number, z: number, god: boolean) {
 		const col = team === 'bull' ? GOLD : CRIMSON;
 		this.spawnBurst(x, groundY(x, z) + 1, z, col, god ? 130 : 60);
+		this.spawnSmoke(x, groundY(x, z) + 1.2, z, god ? 16 : 9);
 		this.addDecal(x, z, god ? 3 : 1.8);
 		this.shake = Math.min(2, this.shake + (god ? 1.5 : 0.8));
 		let hits = 0;
@@ -1305,9 +1382,11 @@ export class Battle {
 		if (this.phase === 'battle') {
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
-			const bias = THREE.MathUtils.clamp(this.momentum / 25, -1, 1) * FRONT_MAX * 0.35;
-			// 0.95 ≥ the 0.9 win threshold — total battlefield dominance can actually storm the base
-			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.95 + bias, -FRONT_MAX, FRONT_MAX);
+			// PRICE IS THE PRIMARY DRIVER (NewHedge rule: "when price moves higher, the
+			// bulls advance toward higher markers"). The timeframe's % move places the
+			// front on the mcap ladder; the fighting on the field modulates around it.
+			const priceTerm = THREE.MathUtils.clamp(this.momentum / 40, -1, 1) * FRONT_MAX * 0.8;
+			const target = THREE.MathUtils.clamp(priceTerm + delta * FRONT_MAX * 0.45, -FRONT_MAX, FRONT_MAX);
 			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.4);
 			// a side reaches the enemy base → the theater falls
 			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
@@ -1515,6 +1594,22 @@ export class Battle {
 
 		this.frontLine.position.x = this.frontX; this.frontLine.position.y = hillY(this.frontX) + 0.12;
 		(this.frontLine.material as THREE.MeshBasicMaterial).opacity = 0.2 + Math.sin(this.time * 5) * 0.07;
+		// liquidity buffers hug the front — each side's width breathes with its tape share
+		{
+			const tot = this.presB + this.presS;
+			const share = tot > 0 ? this.presB / tot : 0.5;
+			const wb = 3 + share * 17, ws = 3 + (1 - share) * 17;
+			this.bufWB += (wb - this.bufWB) * Math.min(1, dt * 1.5);
+			this.bufWS += (ws - this.bufWS) * Math.min(1, dt * 1.5);
+			this.bufBull.scale.x = this.bufWB; this.bufBull.position.x = this.frontX - this.bufWB / 2 - 1;
+			this.bufBear.scale.x = -this.bufWS; this.bufBear.position.x = this.frontX + this.bufWS / 2 + 1;
+		}
+		// the gates breathe — brighter as the front closes in on them
+		for (let gi = 0; gi < this.gates.length; gi++) {
+			const g = this.gates[gi];
+			const near = 1 - Math.min(1, Math.abs(this.frontX - g.position.x) / FRONT_MAX);
+			(g.material as THREE.MeshBasicMaterial).opacity = 0.1 + Math.sin(this.time * 2 + gi * 2) * 0.03 + near * 0.3;
+		}
 		// the market-cap marker rides the front line (its altitude on the hill)
 		this.mcapSprite.position.set(this.frontX, hillY(this.frontX) + 11 + Math.sin(this.time * 1.5) * 0.4, 0);
 
@@ -1559,8 +1654,9 @@ export class Battle {
 		this.phase = 'victory'; this.winner = team; this.wonUntil = performance.now() + 4000; this.shake = 1.7;
 		if (team === 'bull') this.winsBull++; else this.winsBear++;
 		const loser = team === 'bull' ? this.capitalBear : this.capitalBull;
-		// the fallen base erupts
+		// the fallen base erupts and burns
 		this.spawnBurst(loser.position.x, 4, 0, team === 'bull' ? CRIMSON : GOLD, 140);
+		this.spawnSmoke(loser.position.x, 5, 0, 34);
 		for (let k = 0; k < 6; k++) this.addDecal(loser.position.x + (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, 2.5);
 		this.onCampaign?.({ winner: team, campaign: this.campaign });
 	}
@@ -1686,6 +1782,10 @@ export class Battle {
 			this.panX = THREE.MathUtils.clamp(this.panX, -88, 88); this.panZ = THREE.MathUtils.clamp(this.panZ, -66, 66);
 		}
 
+		// war camera: unless the user is driving, drift to keep the front line on screen
+		if (performance.now() > this.manualUntil && !this.focus && !this.keys.size) {
+			this.panX += (this.frontX * 0.72 - this.panX) * Math.min(1, dt * 0.35);
+		}
 		const target = this._camTarget.set(this.panX, 1, this.panZ);
 		let radius = 60 * this.camZoom;
 		let height = THREE.MathUtils.lerp(24, 128, this.camPitch) * (0.55 + this.camZoom * 0.45);
