@@ -491,7 +491,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.06; private camPitch = 0.46; private camZoom = 0.85;
+	private camYaw = 0.06; private camPitch = 0.46; private camZoom = 0.85; private zoomPunch = 0;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
@@ -544,6 +544,8 @@ export class Battle {
 		this.buildSparks();
 		this.buildSouls();
 		this.buildSmoke();
+		this.buildEmbers();
+		this.buildStandards();
 		this.buildDecals();
 		this.buildAuras();
 
@@ -696,6 +698,40 @@ export class Battle {
 			parts.push(base, shaft, tip);
 		};
 		for (const [ox, oz, os] of [[-44, 14.5, 1], [-44, 3.5, 1], [48, 14.5, 1.1], [48, 3.5, 1.1], [-78, -30, 0.8], [76, 38, 0.8]] as const) obeliskAt(ox, oz, os);
+		// war-torn debris across the fighting ground: rocks, fallen spears, dropped
+		// shields, old bones — the arena reads as a field that has seen years of war
+		for (let i = 0; i < 60; i++) {
+			const x = rng(-BOARD_W / 2 + 8, BOARD_W / 2 - 8), z = rng(-BOARD_D / 2 + 8, BOARD_D / 2 - 8);
+			if (onRoad(z)) continue;
+			// low-poly squashed sphere reads as a boulder (and stays merge-compatible —
+			// polyhedron geometries are non-indexed and would break mergeGeometries)
+			const rock = paint(new THREE.SphereGeometry(rng(0.16, 0.42), 6, 4), Math.random() < 0.5 ? '#6b6154' : '#7d7060');
+			rock.scale(1, rng(0.45, 0.75), rng(0.75, 1.1));
+			rock.rotateY(rng(0, Math.PI)); rock.translate(x, this.terrainH(x, z) + 0.1, z);
+			parts.push(rock);
+		}
+		for (let i = 0; i < 26; i++) {
+			const x = rng(-52, 52), z = rng(-ARENA_Z + 4, ARENA_Z - 4);
+			if (onRoad(z)) continue;
+			const spear = paint(new THREE.CylinderGeometry(0.04, 0.04, rng(1.7, 2.4), 5), '#5e4426');
+			spear.rotateZ(Math.PI / 2); spear.rotateY(rng(0, Math.PI)); spear.translate(x, this.terrainH(x, z) + 0.06, z);
+			parts.push(spear);
+		}
+		for (let i = 0; i < 16; i++) {
+			const x = rng(-48, 48), z = rng(-ARENA_Z + 4, ARENA_Z - 4);
+			if (onRoad(z)) continue;
+			const shield = paint(new THREE.CylinderGeometry(0.46, 0.46, 0.07, 12), x < 0 ? '#1c5c34' : '#6e2230');
+			shield.rotateX(rng(-0.12, 0.12)); shield.translate(x, this.terrainH(x, z) + 0.08, z);
+			const boss2 = paint(new THREE.SphereGeometry(0.1, 6, 5), '#8a733c'); boss2.translate(x, this.terrainH(x, z) + 0.16, z);
+			parts.push(shield, boss2);
+		}
+		for (let i = 0; i < 14; i++) {
+			const x = rng(-40, 40), z = rng(-ARENA_Z + 6, ARENA_Z - 6);
+			if (onRoad(z)) continue;
+			const skull2 = paint(new THREE.SphereGeometry(rng(0.12, 0.17), 7, 6), '#cfc4a8');
+			skull2.translate(x, this.terrainH(x, z) + 0.12, z);
+			parts.push(skull2);
+		}
 		const merged = mergeGeometries(parts, false)!; merged.computeVertexNormals();
 		const mesh = new THREE.Mesh(merged, toonMaterial()); mesh.castShadow = true; mesh.receiveShadow = true; this.scene.add(mesh);
 
@@ -808,6 +844,36 @@ export class Battle {
 
 	// live tape pressure from the page — drives the buffer widths
 	setPressure(buyUsd: number, sellUsd: number) { this.presB = buyUsd; this.presS = sellUsd; }
+
+	// army standards: winged-disc battle standards that march with the front line,
+	// one per host, banner cloth streaming — the war's position made physical
+	private standards: { grp: THREE.Group; cloth: THREE.Mesh; side: number }[] = [];
+	private buildStandards() {
+		for (const team of ['bull', 'bear'] as Team[]) {
+			const p = PAL[team];
+			const side = team === 'bull' ? -1 : 1;
+			const grp = new THREE.Group();
+			const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.09, 0.12, 7.2, 6), '#4a3220'), toonMaterial());
+			pole.position.y = 3.6; grp.add(pole);
+			const bar = new THREE.Mesh(paint(new THREE.BoxGeometry(1.7, 0.12, 0.12), p.accent), toonMaterial());
+			bar.position.y = 6.3; grp.add(bar);
+			// winged sun-disc emblem
+			const disc = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0xffd34d : 0xff8a5a }));
+			disc.position.y = 7.0; grp.add(disc);
+			for (const s of [-1, 1]) {
+				const wing = new THREE.Mesh(paint(new THREE.BoxGeometry(0.9, 0.1, 0.26), p.accent), toonMaterial());
+				wing.position.set(0.7 * s, 7.05, 0); wing.rotation.z = 0.35 * s; grp.add(wing);
+			}
+			// hanging banner cloth
+			const cloth = new THREE.Mesh(paint(new THREE.PlaneGeometry(1.5, 2.6), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
+			cloth.position.set(0, 5.0, 0); grp.add(cloth);
+			const trim = new THREE.Mesh(paint(new THREE.BoxGeometry(1.6, 0.14, 0.1), p.accent), toonMaterial());
+			trim.position.y = 3.72; grp.add(trim);
+			grp.position.set(side * 8, 0, 26);
+			this.scene.add(grp);
+			this.standards.push({ grp, cloth, side });
+		}
+	}
 
 	private priceTex!: THREE.CanvasTexture;
 	private priceCanvas!: HTMLCanvasElement;
@@ -949,6 +1015,44 @@ export class Battle {
 		this.sparks = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,255,255,0.95)'), size: 0.55, vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, alphaTest: 0.35 }));
 		this.sparks.frustumCulled = false; this.scene.add(this.sparks);
 	}
+	// ambient war-embers: faint gold motes drifting up off the field all night long
+	private embers!: THREE.Points; private emberPos!: Float32Array; private emberVel!: Float32Array; private emberLife!: Float32Array; private EMBER_N = 150;
+	private buildEmbers() {
+		const N = this.EMBER_N;
+		this.emberPos = new Float32Array(N * 3); this.emberVel = new Float32Array(N * 3); this.emberLife = new Float32Array(N);
+		const colors = new Float32Array(N * 3);
+		for (let i = 0; i < N; i++) {
+			this.respawnEmber(i, true);
+			const warm = 0.5 + Math.random() * 0.5;
+			colors[i * 3] = 0.42 * warm; colors[i * 3 + 1] = 0.3 * warm; colors[i * 3 + 2] = 0.1 * warm;
+		}
+		const g = new THREE.BufferGeometry();
+		g.setAttribute('position', new THREE.BufferAttribute(this.emberPos, 3));
+		g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+		this.embers = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(255,220,160,0.9)'), size: 0.5, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+		this.embers.frustumCulled = false; this.scene.add(this.embers);
+	}
+	private respawnEmber(i: number, seed = false) {
+		this.emberPos[i * 3] = (Math.random() - 0.5) * 150;
+		this.emberPos[i * 3 + 1] = seed ? Math.random() * 9 : 0.3;
+		this.emberPos[i * 3 + 2] = (Math.random() - 0.5) * 110;
+		this.emberVel[i * 3] = (Math.random() - 0.5) * 0.5;
+		this.emberVel[i * 3 + 1] = 0.35 + Math.random() * 0.65;
+		this.emberVel[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
+		this.emberLife[i] = 5 + Math.random() * 9;
+	}
+	private updateEmbers(dt: number) {
+		const p = this.emberPos, v = this.emberVel;
+		for (let i = 0; i < this.EMBER_N; i++) {
+			this.emberLife[i] -= dt;
+			if (this.emberLife[i] <= 0) { this.respawnEmber(i); continue; }
+			p[i * 3] += (v[i * 3] + Math.sin(this.time * 0.7 + i) * 0.25) * dt;
+			p[i * 3 + 1] += v[i * 3 + 1] * dt;
+			p[i * 3 + 2] += v[i * 3 + 2] * dt;
+		}
+		(this.embers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+	}
+
 	private smoke!: THREE.Points; private smokePos!: Float32Array; private smokeVel!: Float32Array; private smokeLife!: Float32Array; private smokeMax!: Float32Array; private smokeColor!: Float32Array; private smokeHead = 0; private SMOKE_N = 240;
 	private buildSmoke() {
 		const N = this.SMOKE_N; this.smokePos = new Float32Array(N * 3); this.smokeColor = new Float32Array(N * 3); this.smokeVel = new Float32Array(N * 3); this.smokeLife = new Float32Array(N); this.smokeMax = new Float32Array(N);
@@ -1094,7 +1198,7 @@ export class Battle {
 		}
 		// quiet spawns replay history on page load — units muster without the fireworks
 		if (input.quiet) return;
-		if (legend) { this.shake = Math.min(1.6, this.shake + (god ? 1.4 : 0.7)); if (god) this.slowmo = 1.1; }
+		if (legend) { this.shake = Math.min(1.6, this.shake + (god ? 1.4 : 0.7)); if (god) { this.slowmo = 1.1; this.zoomPunch = 1; } }
 		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
 		// a whale entering the field calls down a sky strike on the enemy host
 		if (legend) {
@@ -1364,6 +1468,7 @@ export class Battle {
 		this.updateArrows(simDt);
 		this.updateStrikes(simDt);
 		this.updateParticles(simDt);
+		this.updateEmbers(simDt);
 		this.updateDecals(simDt);
 		this.render(dt);
 
@@ -1640,6 +1745,12 @@ export class Battle {
 			const near = 1 - Math.min(1, Math.abs(this.frontX - g.position.x) / FRONT_MAX);
 			(g.material as THREE.MeshBasicMaterial).opacity = 0.1 + Math.sin(this.time * 2 + gi * 2) * 0.03 + near * 0.3;
 		}
+		// the standards march with their host's edge of the front
+		for (const st of this.standards) {
+			const sx = this.frontX + st.side * 7;
+			st.grp.position.x += (sx - st.grp.position.x) * Math.min(1, dt * 1.2);
+			st.grp.position.y = groundY(st.grp.position.x, st.grp.position.z);
+		}
 		// the market-cap marker rides the front line (its altitude on the hill)
 		this.mcapSprite.position.set(this.frontX, hillY(this.frontX) + 11 + Math.sin(this.time * 1.5) * 0.4, 0);
 
@@ -1820,8 +1931,11 @@ export class Battle {
 			this.panX += (this.frontX * 0.72 - this.panX) * Math.min(1, dt * 0.35);
 		}
 		const target = this._camTarget.set(this.panX, 1, this.panZ);
-		let radius = 60 * this.camZoom;
-		let height = THREE.MathUtils.lerp(24, 128, this.camPitch) * (0.55 + this.camZoom * 0.45);
+		// hero-moment punch: a god's arrival pulls the camera in for a beat
+		this.zoomPunch = Math.max(0, this.zoomPunch - dt * 0.9);
+		const punch = 1 - Math.sin(Math.min(1, this.zoomPunch) * Math.PI) * 0.14;
+		let radius = 60 * this.camZoom * punch;
+		let height = THREE.MathUtils.lerp(24, 128, this.camPitch) * (0.55 + this.camZoom * 0.45) * (punch * 0.3 + 0.7);
 
 		if (this.focus) {
 			const tracked = this.units.find((u) => u.tracked && u.dying <= 0);
@@ -1838,6 +1952,12 @@ export class Battle {
 			const f = this.flags[i];
 			f.rotation.y = Math.sin(this.time * 2.2 + i * 2) * 0.28;
 			f.position.x = 1.8 + Math.sin(this.time * 2.2 + i * 2) * 0.15;
+		}
+		// standard cloth streams in the night wind
+		for (let i = 0; i < this.standards.length; i++) {
+			const c = this.standards[i].cloth;
+			c.rotation.y = Math.sin(this.time * 2.6 + i * 2.4) * 0.3;
+			c.rotation.z = Math.sin(this.time * 1.8 + i) * 0.06;
 		}
 
 		this.updateAuras(dt);

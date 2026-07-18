@@ -540,9 +540,26 @@
 	.link { background: none; border: none; color: var(--green); cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0; }
 
 	@media (max-width: 1000px) {
-		.orderbook, .forces, .track, .ledger { display: none; }
-		.feed { width: calc(100vw - 44px); bottom: 40px; }
-		.mcap-v { font-size: 30px; }
+		/* compact war-room: keep the essentials (price, walls, feed, track), drop the rest */
+		.orderbook, .forces, .ledger, .controls { display: none; }
+		.topbar { padding: 10px 12px; flex-wrap: wrap; }
 		.brand, .top-right { width: auto; }
+		.brand-sub, .brand-clock { display: none; }
+		.brand-mark { font-size: 16px; }
+		.ticker { order: 3; width: 100%; margin-top: 6px; }
+		.mcap-v { font-size: 26px; }
+		.subline { font-size: 10px; gap: 8px; flex-wrap: wrap; }
+		.frontbar { width: min(340px, 78vw); }
+		.tf-row .chip { display: none; }
+		.top-right { gap: 6px; }
+		.tally { padding: 6px 8px; font-size: 10px; }
+		.icon-btn { padding: 6px 8px; }
+		.wall { top: auto; bottom: calc(30vh + 118px); }
+		.wall.left { left: 12px; } .wall.right { right: 12px; }
+		.wall-v { font-size: 18px; }
+		.wall-sub { display: none; }
+		.feed { width: calc(100vw - 24px); right: 12px; bottom: 66px; }
+		.feed-rows { max-height: 26vh; }
+		.track { width: calc(100vw - 24px); right: 12px; bottom: 12px; }
 	}
 </style>
