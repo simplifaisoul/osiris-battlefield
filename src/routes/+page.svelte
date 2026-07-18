@@ -32,7 +32,7 @@
 
 	const seen = new Set<string>();
 	let feedId = 1;
-	let tradeTimer: any, tokenTimer: any, clashTimer: any, bannerTimer: any, clockTimer: any;
+	let tradeTimer: any, tokenTimer: any, bannerTimer: any, clockTimer: any;
 	function tick() { clock = new Date().toISOString().slice(11, 19); }
 
 	const mask = (a: string) => (a && a.length > 8 ? a.slice(0, 4) + '…' + a.slice(-4) : a || '—');
@@ -171,6 +171,8 @@
 				if (s.warPhase === 'charge' && lastWarPhase !== 'charge' && s.phase === 'battle') audio?.horn(false);
 				lastWarPhase = s.warPhase;
 				stats = s;
+				// the drums follow the real war rhythm and how thick the fighting is
+				audio?.setBattle(s.warPhase, Math.min(s.bulls, s.bears) / 110);
 			};
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
@@ -183,6 +185,11 @@
 				} else if (e.type === 'strike') {
 					const hit = e.team === 'bull' ? 'THE BEARS' : 'THE BULLS';
 					pushFeed(e.god ? `☀ SPEAR OF RA ANNIHILATES ${hit}` : `𓅃 FALCON OF HORUS DIVES ON ${hit}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true);
+					audio?.strike(!!e.god);
+				} else if (e.type === 'volley') {
+					audio?.volley(e.usd);
+				} else if (e.type === 'kill') {
+					audio?.kill(e.tier === 'TITAN' || e.tier === 'GOD');
 				}
 			};
 			battle.onCampaign = (r) => {
@@ -203,15 +210,11 @@
 			tick(); clockTimer = setInterval(tick, 1000);
 			tradeTimer = setInterval(() => loadTrades(false), 5000);
 			tokenTimer = setInterval(loadToken, 15000);
-			clashTimer = setInterval(() => {
-				if (!audio || muted || stats.phase !== 'battle') return;
-				if (stats.bulls > 0 && stats.bears > 0 && Math.random() < 0.7) audio.clash(0.2 + Math.min(1, Math.min(stats.bulls, stats.bears) / 110) * 0.8);
-			}, 360);
 		})();
 		return () => { alive = false; };
 	});
 
-	onDestroy(() => { clearInterval(tradeTimer); clearInterval(tokenTimer); clearInterval(clashTimer); clearInterval(clockTimer); clearTimeout(bannerTimer); clearTimeout(campaignTimer); audio?.dispose(); battle?.dispose(); });
+	onDestroy(() => { clearInterval(tradeTimer); clearInterval(tokenTimer); clearInterval(clockTimer); clearTimeout(bannerTimer); clearTimeout(campaignTimer); audio?.dispose(); battle?.dispose(); });
 </script>
 
 <svelte:head><title>OSIRIS · Market Battlefield</title></svelte:head>

@@ -12,7 +12,7 @@ export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian';
 export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number };
 
 export type BattleEvent = {
-	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike';
+	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike' | 'volley';
 	team: Team; tier: string; cls: Cls; wallet: string; usd: number; pct: number; god?: boolean;
 };
 
@@ -341,7 +341,7 @@ export class Battle {
 	private winsBull = 0; private winsBear = 0;
 	private warClock = 0; private battlePhase: WarPhase = 'form';
 	// massed archery: volleys loose together on a shared signal during the standoff phases
-	private volleyT = 3; private volleyWindow = 0;
+	private volleyT = 3; private volleyWindow = 0; private volleyAnnounced = false;
 	// the first strike after the horns sound lands in slow motion
 	private awaitClash = false;
 	// single combat before the hosts — one champion from each side meets in no-man's land
@@ -1062,6 +1062,12 @@ export class Battle {
 		p.vx = (tx - sx) / T; p.vz = (tz - sz) / T; p.vy = (ty - sy + 0.5 * g * T * T) / T;
 		// muzzle flash toward the target
 		this.spawnBurst(sx + ((tx - sx) / dist) * 1.1, sy, sz + ((tz - sz) / dist) * 1.1, new THREE.Color(0xffe9a0), 3);
+		// first shaft of each volley signal announces the massed release — arrows really flew
+		if (!this.volleyAnnounced && this.volleyWindow > 0) {
+			this.volleyAnnounced = true;
+			const archers = this._bullComp.archer + this._bearComp.archer;
+			this.onEvent?.({ type: 'volley', team: u.team, tier: '', cls: 'archer', wallet: '', usd: archers, pct: 0 });
+		}
 	}
 
 	private updateArrows(dt: number) {
@@ -1152,7 +1158,7 @@ export class Battle {
 		}
 		// volley signal: during standoffs the archers loose together, every few breaths
 		this.volleyT -= dt;
-		if (this.volleyT <= 0) { this.volleyT = 4.5; this.volleyWindow = 0.5; }
+		if (this.volleyT <= 0) { this.volleyT = 4.5; this.volleyWindow = 0.5; this.volleyAnnounced = false; }
 		else this.volleyWindow -= dt;
 		// a fallen (or removed) champion ends the single combat
 		if (this.duelA && (this.duelA.dying > 0 || this.duelA.hp <= 0)) this.duelA = null;
