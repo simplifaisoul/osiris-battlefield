@@ -8,7 +8,7 @@ import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
 
 export type Team = 'bull' | 'bear';
-export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian';
+export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian' | 'chariot';
 export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number };
 
 export type BattleEvent = {
@@ -17,7 +17,7 @@ export type BattleEvent = {
 };
 
 export type Commander = { wallet: string; kills: number; tier: string; team: Team };
-export type Comp = { spear: number; duelist: number; archer: number; guardian: number };
+export type Comp = Record<Cls, number>;
 
 export type Stats = {
 	bulls: number; bears: number; bullPower: number; bearPower: number;
@@ -60,7 +60,7 @@ function phaseAt(t: number): WarPhase {
 }
 
 // per-class attack pacing (seconds between strikes)
-const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, guardian: 2.4 };
+const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, guardian: 2.4, chariot: 1.35 };
 const KILL_TEMPO = 1.7; // global lethality multiplier (per-hit = dmg * cd * tempo) — fights last
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
@@ -75,13 +75,15 @@ const ROAD_Z = 9; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 8; // deliberate marching pace — the charge multiplier provides the sprint
 const UNIT_SCALE = 2.35;
-const CLASSES: Cls[] = ['spear', 'duelist', 'archer', 'guardian'];
+const CLASSES: Cls[] = ['spear', 'duelist', 'archer', 'guardian', 'chariot'];
 
 const CLASS_STATS: Record<Cls, { hpMul: number; dmgMul: number; scaleMul: number; ranged: boolean; standoff: number; speedMul: number }> = {
 	spear: { hpMul: 1.0, dmgMul: 1.0, scaleMul: 1.0, ranged: false, standoff: 0.8, speedMul: 1.0 },
 	duelist: { hpMul: 0.78, dmgMul: 1.9, scaleMul: 0.95, ranged: false, standoff: 0.6, speedMul: 1.45 },
 	archer: { hpMul: 0.55, dmgMul: 1.7, scaleMul: 0.9, ranged: true, standoff: 13, speedMul: 1.05 },
-	guardian: { hpMul: 2.6, dmgMul: 2.5, scaleMul: 1.0, ranged: false, standoff: 0.9, speedMul: 0.62 }
+	guardian: { hpMul: 2.6, dmgMul: 2.5, scaleMul: 1.0, ranged: false, standoff: 0.9, speedMul: 0.62 },
+	// the war chariot is the battlefield's tank: fast, armored, tramples through the line
+	chariot: { hpMul: 2.2, dmgMul: 1.7, scaleMul: 1.05, ranged: false, standoff: 1.4, speedMul: 1.75 }
 };
 
 const GOLD = new THREE.Color('#2fd66b');
@@ -104,6 +106,7 @@ function hash01(s: string): number {
 }
 function pickClass(tier: string, seed: number): Cls {
 	if (tier === 'TITAN' || tier === 'GOD') return 'guardian';
+	if (tier === 'CHAMPION') return 'chariot'; // champions ride to war
 	// melee-forward mix: the war is decided blade to blade, archers in support
 	if (seed < 0.34) return 'spear';
 	if (seed < 0.68) return 'duelist';
@@ -163,12 +166,57 @@ function chunkyBase(p: Palette): THREE.BufferGeometry[] {
 	return parts;
 }
 
-// khat head-cloth: cap, browband, and a neck flap behind
+// khat head-cloth: cap, browband, and a neck flap behind (the bull look)
 function khat(p: Palette, capHex: string): THREE.BufferGeometry[] {
 	const cap = paint(new THREE.SphereGeometry(0.43, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), capHex); cap.translate(0, 1.64, 0.02);
 	const band = paint(new THREE.CylinderGeometry(0.42, 0.42, 0.1, 12), p.accent); band.translate(0, 1.68, 0.02);
 	const flap = paint(new THREE.BoxGeometry(0.5, 0.5, 0.12), capHex); flap.rotateX(0.16); flap.translate(0, 1.42, -0.3);
 	return [cap, band, flap];
+}
+
+// ---- bear-host gear: the southern host fights under horns and beast-masks ----
+
+// crimson war helm with flaring bull horns — the dome reads team-red from the war camera
+function hornedHelm(p: Palette): THREE.BufferGeometry[] {
+	const dome = paint(new THREE.SphereGeometry(0.42, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.52), '#8a2634'); dome.translate(0, 1.66, 0.02);
+	const band = paint(new THREE.CylinderGeometry(0.43, 0.43, 0.09, 12), p.accent); band.translate(0, 1.62, 0.02);
+	const parts = [dome, band];
+	for (const s of [-1, 1]) {
+		const horn = paint(new THREE.ConeGeometry(0.09, 0.52, 6), '#d8cdb8'); horn.rotateZ(-0.85 * s); horn.translate(0.4 * s, 1.92, 0.02);
+		const tip = paint(new THREE.SphereGeometry(0.05, 5, 4), '#efe7d4'); tip.translate(0.58 * s, 2.1, 0.02);
+		parts.push(horn, tip);
+	}
+	return parts;
+}
+
+// Set-beast half-mask: dark face plate with tall squared ears and gold eye slits
+function setMask(p: Palette): THREE.BufferGeometry[] {
+	const plate = paint(new THREE.BoxGeometry(0.52, 0.36, 0.14), '#2e2836'); plate.translate(0, 1.6, 0.32);
+	const crown = paint(new THREE.SphereGeometry(0.42, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.5), '#78222f'); crown.translate(0, 1.66, 0.0);
+	const parts = [plate, crown];
+	for (const s of [-1, 1]) {
+		const ear = paint(new THREE.BoxGeometry(0.14, 0.46, 0.16), '#2e2836'); ear.rotateZ(0.08 * s); ear.translate(0.2 * s, 2.04, -0.02);
+		const inner = paint(new THREE.BoxGeometry(0.07, 0.28, 0.06), p.accent); inner.rotateZ(0.08 * s); inner.translate(0.2 * s, 2.02, 0.07);
+		const slit = paint(new THREE.BoxGeometry(0.14, 0.05, 0.05), p.accent); slit.translate(0.14 * s, 1.64, 0.4);
+		parts.push(ear, inner, slit);
+	}
+	return parts;
+}
+
+// raider hood with a face wrap across the mouth
+function hood(p: Palette): THREE.BufferGeometry[] {
+	const cowl = paint(new THREE.SphereGeometry(0.45, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), p.clothDark); cowl.translate(0, 1.62, 0);
+	const wrap = paint(new THREE.BoxGeometry(0.5, 0.16, 0.16), p.clothDark); wrap.translate(0, 1.45, 0.28);
+	const pin = paint(new THREE.SphereGeometry(0.06, 5, 4), p.accent); pin.translate(0.2, 1.72, 0.3);
+	return [cowl, wrap, pin];
+}
+
+// round hide shield with a gold boss and rim — the bear line fights behind circles
+function roundShield(p: Palette): THREE.BufferGeometry[] {
+	const disc = paint(new THREE.CylinderGeometry(0.52, 0.52, 0.08, 14), p.clothDark); disc.rotateX(Math.PI / 2); disc.translate(-0.68, 0.98, 0.08);
+	const ring = paint(new THREE.TorusGeometry(0.44, 0.05, 6, 16), p.accent); ring.translate(-0.68, 0.98, 0.12);
+	const boss = paint(new THREE.SphereGeometry(0.13, 8, 6), p.accent); boss.translate(-0.68, 0.98, 0.15);
+	return [disc, ring, boss];
 }
 
 // bronze khopesh — hilt rising from the fist into a curved sickle blade
@@ -192,27 +240,38 @@ function armPair(p: Palette, weaponSide = 1): THREE.BufferGeometry[] {
 	return [aR, cR, fR, aL, cL, fL];
 }
 
-function buildSpearman(p: Palette): THREE.BufferGeometry {
-	const parts = [...chunkyBase(p), ...armPair(p), ...khat(p, p.clothDark)];
+function buildSpearman(p: Palette, bear: boolean): THREE.BufferGeometry {
+	const parts = [...chunkyBase(p), ...armPair(p), ...(bear ? hornedHelm(p) : khat(p, p.clothDark))];
 	// bronze-tipped war spear in the right fist
 	const shaft = paint(new THREE.CylinderGeometry(0.045, 0.045, 2.5, 6), p.wood); shaft.translate(0.62, 1.35, 0.1);
 	const tip = paint(new THREE.ConeGeometry(0.13, 0.44, 6), p.metal); tip.translate(0.62, 2.76, 0.1);
-	// tall Egyptian shield — rounded top, gold eye boss
-	const shield = paint(new THREE.BoxGeometry(0.72, 0.82, 0.08), p.clothDark); shield.translate(-0.68, 0.94, 0.08);
-	const shTop = paint(new THREE.CylinderGeometry(0.36, 0.36, 0.08, 12, 1, false, 0, Math.PI), p.clothDark);
-	shTop.rotateX(Math.PI / 2); shTop.translate(-0.68, 1.35, 0.08);
-	const rim = paint(new THREE.BoxGeometry(0.78, 0.1, 0.1), p.accent); rim.translate(-0.68, 0.56, 0.08);
-	const boss = paint(new THREE.SphereGeometry(0.13, 8, 6), p.accent); boss.translate(-0.68, 1.02, 0.13);
-	parts.push(shaft, tip, shield, shTop, rim, boss);
+	if (bear) {
+		// the bear line fights behind round hide shields
+		parts.push(shaft, tip, ...roundShield(p));
+	} else {
+		// tall Egyptian tower shield — rounded top, gold eye boss
+		const shield = paint(new THREE.BoxGeometry(0.72, 0.82, 0.08), p.clothDark); shield.translate(-0.68, 0.94, 0.08);
+		const shTop = paint(new THREE.CylinderGeometry(0.36, 0.36, 0.08, 12, 1, false, 0, Math.PI), p.clothDark);
+		shTop.rotateX(Math.PI / 2); shTop.translate(-0.68, 1.35, 0.08);
+		const rim = paint(new THREE.BoxGeometry(0.78, 0.1, 0.1), p.accent); rim.translate(-0.68, 0.56, 0.08);
+		const boss = paint(new THREE.SphereGeometry(0.13, 8, 6), p.accent); boss.translate(-0.68, 1.02, 0.13);
+		parts.push(shaft, tip, shield, shTop, rim, boss);
+	}
 	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
 }
 
-function buildDuelist(p: Palette): THREE.BufferGeometry {
+function buildDuelist(p: Palette, bear: boolean): THREE.BufferGeometry {
 	// twin-khopesh blade dancer — both sickle-swords raised, dark iron pauldron spikes
 	const parts = [...chunkyBase(p), ...armPair(p), ...khopesh(p, 1), ...khopesh(p, -1)];
-	// gold circlet with a rearing-serpent crest
-	const band = paint(new THREE.CylinderGeometry(0.41, 0.41, 0.1, 12), p.accent); band.translate(0, 1.7, 0.02);
-	const crest = paint(new THREE.ConeGeometry(0.07, 0.26, 6), p.accent); crest.translate(0, 1.86, 0.34);
+	if (bear) {
+		// the southern blade dancers fight behind Set-beast masks
+		parts.push(...setMask(p));
+	} else {
+		// gold circlet with a rearing-serpent crest
+		const band = paint(new THREE.CylinderGeometry(0.41, 0.41, 0.1, 12), p.accent); band.translate(0, 1.7, 0.02);
+		const crest = paint(new THREE.ConeGeometry(0.07, 0.26, 6), p.accent); crest.translate(0, 1.86, 0.34);
+		parts.push(band, crest);
+	}
 	// spiked shoulder studs — the blade dancer means harm
 	for (const s of [-1, 1]) {
 		const pad = paint(new THREE.SphereGeometry(0.17, 8, 6), '#33303c'); pad.translate(0.34 * s, 1.24, 0.02);
@@ -221,12 +280,12 @@ function buildDuelist(p: Palette): THREE.BufferGeometry {
 	}
 	// flowing back scarf in team linen
 	const scarf = paint(new THREE.BoxGeometry(0.5, 0.85, 0.1), p.cloth); scarf.rotateX(0.3); scarf.translate(0, 0.98, -0.34);
-	parts.push(band, crest, scarf);
+	parts.push(scarf);
 	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
 }
 
-function buildArcher(p: Palette): THREE.BufferGeometry {
-	const parts = [...chunkyBase(p), ...armPair(p), ...khat(p, p.cloth)];
+function buildArcher(p: Palette, bear: boolean): THREE.BufferGeometry {
+	const parts = [...chunkyBase(p), ...armPair(p), ...(bear ? hood(p) : khat(p, p.cloth))];
 	// recurve bow of horn and gold in the right fist
 	const bow = paint(new THREE.TorusGeometry(0.78, 0.05, 8, 20, Math.PI * 1.2), p.wood); bow.rotateY(Math.PI / 2); bow.rotateX(-0.15); bow.translate(0.66, 1.15, 0.1);
 	const bt1 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); bt1.translate(0.66, 1.95, 0.25);
@@ -238,27 +297,94 @@ function buildArcher(p: Palette): THREE.BufferGeometry {
 	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
 }
 
-function buildGuardian(p: Palette): THREE.BufferGeometry {
-	// WHALE AVATAR: jackal-headed guardian of the Duat — towering, gold-collared, great khopesh
+function buildGuardian(p: Palette, bear: boolean): THREE.BufferGeometry {
+	// WHALE AVATAR: bulls field the jackal of Anubis, bears the Set-beast — towering,
+	// gold-collared, great khopesh
 	const parts = [...chunkyBase(p), ...armPair(p)];
 	const dark = '#4a4260'; // moonlit iron — dark, but never a black blob against the night field
-	// jackal skull, muzzle and tall ears over the head
+	// beast skull and muzzle over the head; the Set-beast's snout curves long and low
 	const skull = paint(new THREE.BoxGeometry(0.56, 0.5, 0.54), dark); skull.translate(0, 1.66, 0.02);
-	const snout = paint(new THREE.BoxGeometry(0.22, 0.2, 0.46), dark); snout.translate(0, 1.56, 0.44);
-	const nose = paint(new THREE.BoxGeometry(0.1, 0.1, 0.08), '#000000'); nose.translate(0, 1.58, 0.68);
-	const ear1 = paint(new THREE.BoxGeometry(0.14, 0.52, 0.18), dark); ear1.rotateZ(0.12); ear1.translate(-0.19, 2.1, -0.02);
-	const ear2 = paint(new THREE.BoxGeometry(0.14, 0.52, 0.18), dark); ear2.rotateZ(-0.12); ear2.translate(0.19, 2.1, -0.02);
-	const in1 = paint(new THREE.BoxGeometry(0.07, 0.3, 0.08), p.accent); in1.rotateZ(0.12); in1.translate(-0.19, 2.08, 0.07);
-	const in2 = paint(new THREE.BoxGeometry(0.07, 0.3, 0.08), p.accent); in2.rotateZ(-0.12); in2.translate(0.19, 2.08, 0.07);
-	// burning gold eyes
-	const ey1 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); ey1.translate(-0.14, 1.72, 0.3);
-	const ey2 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); ey2.translate(0.14, 1.72, 0.3);
+	const snout = paint(new THREE.BoxGeometry(0.22, 0.2, bear ? 0.6 : 0.46), dark); if (bear) snout.rotateX(0.22); snout.translate(0, bear ? 1.5 : 1.56, bear ? 0.5 : 0.44);
+	const nose = paint(new THREE.BoxGeometry(0.1, 0.1, 0.08), '#000000'); nose.translate(0, bear ? 1.44 : 1.58, bear ? 0.76 : 0.68);
+	// jackal ears stand tall and pointed; Set-beast ears are square-topped towers
+	const earH = bear ? 0.6 : 0.52, earTilt = bear ? 0.02 : 0.12;
+	const ear1 = paint(new THREE.BoxGeometry(bear ? 0.18 : 0.14, earH, 0.18), dark); ear1.rotateZ(earTilt); ear1.translate(-0.19, bear ? 2.16 : 2.1, -0.02);
+	const ear2 = paint(new THREE.BoxGeometry(bear ? 0.18 : 0.14, earH, 0.18), dark); ear2.rotateZ(-earTilt); ear2.translate(0.19, bear ? 2.16 : 2.1, -0.02);
+	const in1 = paint(new THREE.BoxGeometry(0.07, earH * 0.55, 0.08), p.accent); in1.rotateZ(earTilt); in1.translate(-0.19, bear ? 2.14 : 2.08, 0.07);
+	const in2 = paint(new THREE.BoxGeometry(0.07, earH * 0.55, 0.08), p.accent); in2.rotateZ(-earTilt); in2.translate(0.19, bear ? 2.14 : 2.08, 0.07);
+	// burning eyes — gold for the Duat's jackal, ember-red for the Set-beast
+	const eyeHex = bear ? '#ff6a76' : p.accent;
+	const ey1 = paint(new THREE.SphereGeometry(0.07, 6, 5), eyeHex); ey1.translate(-0.14, 1.72, 0.3);
+	const ey2 = paint(new THREE.SphereGeometry(0.07, 6, 5), eyeHex); ey2.translate(0.14, 1.72, 0.3);
 	// great khopesh in the right hand, ankh of judgement in the left
 	parts.push(...khopesh(p, 1, 1.25));
 	const loop = paint(new THREE.TorusGeometry(0.13, 0.045, 6, 12), p.accent); loop.translate(-0.66, 1.32, 0.12);
 	const bar = paint(new THREE.BoxGeometry(0.34, 0.06, 0.06), p.accent); bar.translate(-0.66, 1.14, 0.12);
 	const stem = paint(new THREE.BoxGeometry(0.06, 0.34, 0.06), p.accent); stem.translate(-0.66, 0.94, 0.12);
 	parts.push(skull, snout, nose, ear1, ear2, in1, in2, ey1, ey2, loop, bar, stem);
+	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
+}
+
+// CHAMPION AVATAR: a horse-drawn war chariot — the battlefield's tank. Faces local +x.
+function buildChariot(p: Palette, bear: boolean): THREE.BufferGeometry {
+	const parts: THREE.BufferGeometry[] = [];
+	const hide = bear ? '#3d2c1e' : '#6b4a2a';
+	const mane = bear ? '#1e1712' : '#3d2a16';
+	// horse: chunky body, arched neck, boxy head, mane ridge, tail
+	const body = paint(new THREE.BoxGeometry(1.1, 0.5, 0.46), hide); body.translate(0.85, 0.82, 0);
+	const chest = paint(new THREE.SphereGeometry(0.27, 8, 6), hide); chest.translate(1.35, 0.85, 0);
+	const rump = paint(new THREE.SphereGeometry(0.28, 8, 6), hide); rump.translate(0.36, 0.86, 0);
+	const neck = paint(new THREE.BoxGeometry(0.3, 0.55, 0.26), hide); neck.rotateZ(-0.35); neck.translate(1.42, 1.18, 0);
+	const head = paint(new THREE.BoxGeometry(0.42, 0.24, 0.22), hide); head.rotateZ(-0.15); head.translate(1.68, 1.42, 0);
+	const muzzle = paint(new THREE.BoxGeometry(0.16, 0.16, 0.18), mane); muzzle.translate(1.88, 1.38, 0);
+	const maneRidge = paint(new THREE.BoxGeometry(0.34, 0.5, 0.1), mane); maneRidge.rotateZ(-0.35); maneRidge.translate(1.32, 1.26, 0);
+	const tail = paint(new THREE.BoxGeometry(0.14, 0.5, 0.12), mane); tail.rotateZ(0.5); tail.translate(0.16, 0.62, 0);
+	// gold bridle + team-plume on the horse's brow
+	const bridle = paint(new THREE.BoxGeometry(0.08, 0.26, 0.24), p.accent); bridle.translate(1.62, 1.42, 0);
+	const plume = paint(new THREE.ConeGeometry(0.09, 0.34, 6), p.cloth); plume.translate(1.56, 1.68, 0);
+	parts.push(body, chest, rump, neck, head, muzzle, maneRidge, tail, bridle, plume);
+	// legs
+	for (const [lx, lz] of [[1.28, 0.16], [1.28, -0.16], [0.48, 0.16], [0.48, -0.16]] as const) {
+		const leg = paint(new THREE.CylinderGeometry(0.07, 0.06, 0.6, 6), hide); leg.translate(lx, 0.3, lz);
+		const hoof = paint(new THREE.CylinderGeometry(0.075, 0.075, 0.1, 6), mane); hoof.translate(lx, 0.05, lz);
+		parts.push(leg, hoof);
+	}
+	// yoke pole from cart to harness
+	const pole = paint(new THREE.CylinderGeometry(0.05, 0.05, 1.15, 6), p.wood); pole.rotateZ(Math.PI / 2 - 0.1); pole.translate(0.15, 0.66, 0);
+	// cart: deck, curved team-linen front rail, side boards, gold trim
+	const deck = paint(new THREE.BoxGeometry(0.78, 0.1, 0.7), p.wood); deck.translate(-0.55, 0.6, 0);
+	const front = paint(new THREE.BoxGeometry(0.12, 0.52, 0.7), p.cloth); front.translate(-0.2, 0.9, 0);
+	const trim = paint(new THREE.BoxGeometry(0.14, 0.09, 0.72), p.accent); trim.translate(-0.2, 1.18, 0);
+	const sideL = paint(new THREE.BoxGeometry(0.66, 0.4, 0.09), p.cloth); sideL.translate(-0.5, 0.84, 0.33);
+	const sideR = paint(new THREE.BoxGeometry(0.66, 0.4, 0.09), p.cloth); sideR.translate(-0.5, 0.84, -0.33);
+	const axle = paint(new THREE.CylinderGeometry(0.05, 0.05, 0.95, 6), mane); axle.rotateX(Math.PI / 2); axle.translate(-0.55, 0.42, 0);
+	parts.push(pole, deck, front, trim, sideL, sideR, axle);
+	// big spoked wheels with gold hubs
+	for (const s of [-1, 1]) {
+		const wheel = paint(new THREE.CylinderGeometry(0.42, 0.42, 0.08, 12), p.wood); wheel.rotateX(Math.PI / 2); wheel.translate(-0.55, 0.42, 0.44 * s);
+		const tyre = paint(new THREE.TorusGeometry(0.4, 0.05, 6, 14), mane); tyre.translate(-0.55, 0.42, 0.44 * s);
+		const hub = paint(new THREE.SphereGeometry(0.09, 6, 5), p.accent); hub.translate(-0.55, 0.42, 0.5 * s);
+		parts.push(wheel, tyre, hub);
+	}
+	// charioteer: compact rider braced on the deck, spear couched forward
+	const kilt = paint(new THREE.CylinderGeometry(0.24, 0.32, 0.34, 8), p.cloth); kilt.translate(-0.5, 1.0, 0);
+	const torso = paint(new THREE.CylinderGeometry(0.22, 0.26, 0.42, 8), p.skin); torso.translate(-0.5, 1.36, 0);
+	const collar = paint(new THREE.CylinderGeometry(0.24, 0.3, 0.12, 8), p.accent); collar.translate(-0.5, 1.52, 0);
+	const rHead = paint(new THREE.SphereGeometry(0.28, 10, 8), p.skin); rHead.translate(-0.5, 1.78, 0.02);
+	parts.push(kilt, torso, collar, rHead);
+	if (bear) {
+		const dome = paint(new THREE.SphereGeometry(0.3, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.52), '#8a2634'); dome.translate(-0.5, 1.84, 0.02);
+		for (const s of [-1, 1]) { const horn = paint(new THREE.ConeGeometry(0.07, 0.36, 5), '#d8cdb8'); horn.rotateZ(-0.85 * s); horn.translate(-0.5 + 0.28 * s, 2.0, 0.02); parts.push(horn); }
+		parts.push(dome);
+	} else {
+		const cap = paint(new THREE.SphereGeometry(0.3, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.55), p.clothDark); cap.translate(-0.5, 1.82, 0.02);
+		const band = paint(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 10), p.accent); band.translate(-0.5, 1.84, 0.02);
+		parts.push(cap, band);
+	}
+	// couched war spear angled over the rail toward the enemy
+	const rShaft = paint(new THREE.CylinderGeometry(0.04, 0.04, 2.1, 6), p.wood); rShaft.rotateZ(Math.PI / 2 - 0.28); rShaft.translate(0.05, 1.5, 0.16);
+	const rTip = paint(new THREE.ConeGeometry(0.11, 0.36, 6), p.metal); rTip.rotateZ(-Math.PI / 2 + 0.28); rTip.translate(1.05, 1.22, 0.16);
+	parts.push(rShaft, rTip);
 	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
 }
 
@@ -377,7 +503,10 @@ export class Battle {
 	onEvent: ((e: BattleEvent) => void) | null = null;
 
 	constructor(canvas: HTMLCanvasElement) {
-		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+		// powerPreference deliberately left default: forcing 'high-performance' on
+		// dual-GPU laptops routes WebGL to the discrete GPU while the page composites
+		// on the integrated one — a known Chrome path that can paint the canvas white.
+		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
 		this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 		this.renderer.setSize(innerWidth, innerHeight);
 		this.renderer.shadowMap.enabled = true;
@@ -737,10 +866,10 @@ export class Battle {
 	}
 
 	private buildArmies() {
-		const builders: Record<Cls, (p: Palette) => THREE.BufferGeometry> = { spear: buildSpearman, duelist: buildDuelist, archer: buildArcher, guardian: buildGuardian };
+		const builders: Record<Cls, (p: Palette, bear: boolean) => THREE.BufferGeometry> = { spear: buildSpearman, duelist: buildDuelist, archer: buildArcher, guardian: buildGuardian, chariot: buildChariot };
 		for (const team of ['bull', 'bear'] as Team[]) {
 			for (const cls of CLASSES) {
-				const mesh = new THREE.InstancedMesh(builders[cls](PAL[team]), toonMaterial(), MAX);
+				const mesh = new THREE.InstancedMesh(builders[cls](PAL[team], team === 'bear'), toonMaterial(), MAX);
 				mesh.castShadow = true; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.count = MAX;
 				this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
 				for (let i = 0; i < MAX; i++) { mesh.setMatrixAt(i, this.dummy.matrix); const v = 0.92 + Math.random() * 0.16; mesh.setColorAt(i, this.tmpColor.setScalar(v)); }
@@ -863,6 +992,7 @@ export class Battle {
 		// dollar floor too, so GOD/TITAN spectacle stays rare enough to mean something
 		if (tier.name === 'GOD' && input.usd < 2000) tier = TIERS[1];
 		if (tier.name === 'TITAN' && input.usd < 400) tier = TIERS[2];
+		if (tier.name === 'CHAMPION' && input.usd < 150) tier = TIERS[3]; // dust doesn't ride a chariot
 		const god = tier.name === 'GOD';
 		const legend = god || tier.name === 'TITAN';
 		const cls = pickClass(tier.name, hash01(input.wallet + input.usd));
@@ -1143,7 +1273,7 @@ export class Battle {
 		this.resize();
 	}
 
-	private emptyComp(): Comp { return { spear: 0, duelist: 0, archer: 0, guardian: 0 }; }
+	private emptyComp(): Comp { return { spear: 0, duelist: 0, archer: 0, guardian: 0, chariot: 0 }; }
 	private _bullPower = 0; private _bearPower = 0; private _bullCount = 0; private _bearCount = 0;
 	private _bullComp = this.emptyComp(); private _bearComp = this.emptyComp();
 
@@ -1296,16 +1426,18 @@ export class Battle {
 						t.x += (dx / Math.max(0.01, dist)) * kb; t.z += (dz / Math.max(0.01, dist)) * kb * 0.4;
 						t.hp -= per * this.guardMul(t); t.struck = 0.16;
 						if (t.hp <= 0) this.kill(t, [u]);
-						// a guardian's great khopesh cleaves through nearby enemies
-						if (u.cls === 'guardian') {
+						// a guardian's great khopesh cleaves through nearby enemies;
+						// a chariot's horses trample whoever presses around its target
+						const cleave = u.cls === 'guardian' ? { r: 2.4, mul: 0.55, max: 3 } : u.cls === 'chariot' ? { r: 2.0, mul: 0.45, max: 2 } : null;
+						if (cleave) {
 							const foes = u.team === 'bull' ? bearsAlive : bullsAlive;
 							let hits = 0;
 							for (const e of foes) {
 								if (e === t || e.dying > 0 || e.hp <= 0) continue;
 								const ex = e.x - t.x, ez = e.z - t.z;
-								if (ex * ex + ez * ez < 2.4 * 2.4) { e.hp -= per * 0.55 * this.guardMul(e); e.struck = 0.16; if (e.hp <= 0) this.kill(e, [u]); if (++hits >= 3) break; }
+								if (ex * ex + ez * ez < cleave.r * cleave.r) { e.hp -= per * cleave.mul * this.guardMul(e); e.struck = 0.16; if (e.hp <= 0) this.kill(e, [u]); if (++hits >= cleave.max) break; }
 							}
-							this.shake = Math.min(1.2, this.shake + 0.12);
+							if (u.cls === 'guardian') this.shake = Math.min(1.2, this.shake + 0.12);
 						}
 					}
 				}
@@ -1490,10 +1622,12 @@ export class Battle {
 				d.scale.setScalar(s);
 				d.rotation.set(-loose * 0.6, u.face, Math.sin(u.bob * 0.5) * 0.05);
 			} else if (u.strike > 0) {
-				// weapon strike: anticipation wind-up then chop into the target
+				// weapon strike: anticipation wind-up then chop into the target.
+				// chariots don't chop — the whole rig rams forward on flat wheels.
 				const t = 1 - u.strike / 0.32; // 0 → 1 over the swing
-				const swing = t < 0.35 ? -t / 0.35 * 0.55 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'guardian' ? 0.95 : 0.7);
-				const lungeF = t < 0.35 ? 0 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'duelist' ? 0.7 : 0.4);
+				const chariot = u.cls === 'chariot';
+				const swing = (t < 0.35 ? -t / 0.35 * 0.55 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'guardian' ? 0.95 : 0.7)) * (chariot ? 0.18 : 1);
+				const lungeF = t < 0.35 ? 0 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'duelist' ? 0.7 : chariot ? 0.9 : 0.4);
 				// duelists carve alternating diagonal arcs — left blade, then right
 				const roll = u.cls === 'duelist' ? Math.sin(t * Math.PI) * 0.5 * u.swingSide : 0;
 				const fx = Math.cos(u.face), fz = -Math.sin(u.face); // forward (local +x) from face angle
@@ -1510,7 +1644,12 @@ export class Battle {
 				const bp = this.battlePhase;
 				const braced = u.cls === 'spear' && (bp === 'form' || bp === 'advance' || bp === 'regroup');
 				const gait = Math.sin(u.ranged ? u.bob : this.time * 8.5 + u.slot * 0.35 + u.row * 0.9);
-				if (braced) {
+				if (u.cls === 'chariot') {
+					// wheels roll — no footstep bounce, just a low road-rumble sway
+					d.position.set(u.x, gy + Math.abs(gait) * 0.03, u.z);
+					d.scale.setScalar(s);
+					d.rotation.set(0.02, u.face, gait * 0.04);
+				} else if (braced) {
 					// shield wall: planted, leaning into the shield, barely swaying
 					d.position.set(u.x, gy + Math.abs(gait) * 0.05 * u.scale, u.z);
 					d.scale.setScalar(s);
@@ -1580,10 +1719,15 @@ export class Battle {
 			this.renderer.render(this.scene, this.camera);
 			return;
 		}
-		// one-time sanity probe a few frames in: an all-white buffer means a broken pipeline
-		if (!this.fxChecked && this.frame > 12) {
+		// continuous watchdog (first check a few frames in, then every ~2s): an
+		// all-white buffer at ANY point — even late-onset driver NaN creep — drops
+		// post-processing for good instead of leaving the player a white screen
+		if ((!this.fxChecked && this.frame > 12) || (this.fxChecked && this.frame % 120 === 0)) {
 			this.fxChecked = true;
-			if (this.frameIsBlownOut()) this.disableFx();
+			if (this.frameIsBlownOut()) {
+				console.warn('[battle] post-processing produced a blown-out frame — falling back to direct rendering');
+				this.disableFx();
+			}
 		}
 	}
 

@@ -28,9 +28,12 @@ html, body { background: var(--bg); color: var(--text); font-family: var(--sans)
 .muted { color: var(--text-2); }
 .dim { color: var(--text-3); }
 
+/* NOTE: no backdrop-filter anywhere in this app. Chrome on dual-GPU (Optimus)
+   laptops has a long-standing compositing bug where backdrop-filter layered
+   over an accelerated WebGL canvas paints WHITE. Panels use solid translucent
+   gradients instead. */
 .glass {
-	background: linear-gradient(160deg, rgba(16, 9, 18, 0.72), rgba(8, 5, 12, 0.66));
-	backdrop-filter: blur(18px) saturate(1.25);
+	background: linear-gradient(160deg, rgba(14, 9, 16, 0.92), rgba(7, 5, 11, 0.88));
 	border: 1px solid var(--line);
 	border-radius: 12px;
 	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);

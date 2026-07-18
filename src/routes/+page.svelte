@@ -7,7 +7,7 @@
 	let battle: Battle | null = null;
 	let audio: WarAudio | null = null;
 
-	const EMPTY_COMP: Comp = { spear: 0, duelist: 0, archer: 0, guardian: 0 };
+	const EMPTY_COMP: Comp = { spear: 0, duelist: 0, archer: 0, guardian: 0, chariot: 0 };
 	const EMPTY: Stats = {
 		bulls: 0, bears: 0, bullPower: 0, bearPower: 0, frontPct: 50, casualtiesBull: 0, casualtiesBear: 0,
 		fps: 0, round: 1, winBull: 0, winBear: 0, phase: 'battle', winner: null, warPhase: 'form', totalKills: 0,
@@ -262,7 +262,8 @@
 				Every <span class="green">buy</span> deploys a soldier for the <span class="green">bulls</span>;
 				every <span class="red">sell</span> reinforces the <span class="red">bears</span>.
 				Bigger orders field mightier warriors — spearmen hold the line, twin-khopesh duelists
-				dance through the melee, archers rain bronze, and whales awaken jackal-headed
+				dance through the melee, archers rain bronze, champions ride
+				<span class="green">war chariots</span> through the ranks, and whales awaken beast-headed
 				<span class="green">guardians</span> of the Duat. Watch the order flow fight it out in real time.
 			</p>
 			<button class="enter-btn" onclick={enter} disabled={!ready}>{ready ? 'ENTER THE BATTLEFIELD' : 'LOADING ORDER FLOW…'}</button>
@@ -372,11 +373,11 @@
 <div class="forces glass">
 	<div class="force">
 		<div class="force-head green mono">◤ BULLS · LONGS <span class="force-n">{stats.bulls}</span></div>
-		<div class="force-comp mono"><span><em>SPR</em> {stats.bullComp.spear}</span><span><em>DUE</em> {stats.bullComp.duelist}</span><span><em>ARC</em> {stats.bullComp.archer}</span><span><em>GRD</em> {stats.bullComp.guardian}</span></div>
+		<div class="force-comp mono"><span><em>SPR</em> {stats.bullComp.spear}</span><span><em>DUE</em> {stats.bullComp.duelist}</span><span><em>ARC</em> {stats.bullComp.archer}</span><span><em>CHA</em> {stats.bullComp.chariot}</span><span><em>GRD</em> {stats.bullComp.guardian}</span></div>
 	</div>
 	<div class="force">
 		<div class="force-head red mono">BEARS · SHORTS ◥ <span class="force-n">{stats.bears}</span></div>
-		<div class="force-comp mono"><span><em>SPR</em> {stats.bearComp.spear}</span><span><em>DUE</em> {stats.bearComp.duelist}</span><span><em>ARC</em> {stats.bearComp.archer}</span><span><em>GRD</em> {stats.bearComp.guardian}</span></div>
+		<div class="force-comp mono"><span><em>SPR</em> {stats.bearComp.spear}</span><span><em>DUE</em> {stats.bearComp.duelist}</span><span><em>ARC</em> {stats.bearComp.archer}</span><span><em>CHA</em> {stats.bearComp.chariot}</span><span><em>GRD</em> {stats.bearComp.guardian}</span></div>
 	</div>
 </div>
 
@@ -443,7 +444,7 @@
 	.flash { position: fixed; inset: 0; z-index: 58; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(255,255,255,0.6), rgba(200,255,220,0.2) 60%, transparent 100%); animation: flashfade 0.65s ease-out forwards; }
 	@keyframes flashfade { from { opacity: 1; } to { opacity: 0; } }
 
-	.intro { position: fixed; inset: 0; z-index: 60; background: radial-gradient(circle at 72% 18%, rgba(120,40,50,0.22), transparent 40%), radial-gradient(circle at 50% 40%, rgba(16,10,20,0.72), rgba(4,2,7,0.97)); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; animation: rise 0.5s both; }
+	.intro { position: fixed; inset: 0; z-index: 60; background: radial-gradient(circle at 72% 18%, rgba(120,40,50,0.22), transparent 40%), radial-gradient(circle at 50% 40%, rgba(16,10,20,0.9), rgba(4,2,7,0.98)); display: flex; align-items: center; justify-content: center; animation: rise 0.5s both; }
 	.intro-inner { text-align: center; max-width: 580px; padding: 30px; }
 	.intro-eye { font-size: 66px; color: var(--green); text-shadow: 0 0 40px rgba(20,241,149,0.5); }
 	.intro-title { font-size: 44px; font-weight: 900; letter-spacing: 0.04em; margin: 12px 0 10px; color: #fff; }
@@ -479,11 +480,11 @@
 	.fb-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: linear-gradient(90deg, rgba(20,241,149,0.55), rgba(20,241,149,0.85)); transition: width 0.4s ease; }
 	.fb-marker { position: absolute; top: -3px; width: 3px; height: 11px; border-radius: 2px; background: #fff; box-shadow: 0 0 8px rgba(255,255,255,0.8); transform: translateX(-50%); transition: left 0.4s ease; }
 	.tf-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; pointer-events: auto; }
-	.tf-toggle { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(8,10,8,0.55); border: 1px solid var(--line); backdrop-filter: blur(10px); }
+	.tf-toggle { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(8,10,8,0.85); border: 1px solid var(--line); }
 	.tf-btn { padding: 6px 13px; border-radius: 7px; border: none; background: none; cursor: pointer; font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: 0.06em; transition: all 0.15s; }
 	.tf-btn:hover { color: var(--text); }
 	.tf-btn.on { background: rgba(20,241,149,0.18); color: var(--green); }
-	.chip { padding: 6px 11px; border-radius: 8px; background: rgba(8,10,8,0.55); border: 1px solid var(--line); font-size: 10px; letter-spacing: 0.04em; color: var(--text); backdrop-filter: blur(10px); }
+	.chip { padding: 6px 11px; border-radius: 8px; background: rgba(8,10,8,0.85); border: 1px solid var(--line); font-size: 10px; letter-spacing: 0.04em; color: var(--text); }
 
 	.wall { position: fixed; top: 92px; z-index: 10; }
 	.wall-sub { font-size: 9px; letter-spacing: 0.08em; margin-top: 2px; }
