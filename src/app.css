@@ -44,6 +44,15 @@ html, body { background: var(--bg); color: var(--text); font-family: var(--sans)
 @keyframes slidein { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes glow { 0%,100% { box-shadow: 0 0 20px rgba(var(--gold-rgb),0.2); } 50% { box-shadow: 0 0 40px rgba(var(--gold-rgb),0.5); } }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--crimson); box-shadow: 0 0 8px var(--crimson); animation: blink 1.6s infinite; display: inline-block; }
+.live-dot.sm { width: 5px; height: 5px; }
+
+/* war-console chrome */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(var(--gold-rgb), 0.35); }
+:focus-visible { outline: 1px solid rgba(var(--gold-rgb), 0.6); outline-offset: 2px; }
+::placeholder { color: var(--text-3); }
 
 .btn {
 	font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
