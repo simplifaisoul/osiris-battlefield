@@ -61,7 +61,7 @@ function phaseAt(t: number): WarPhase {
 
 // per-class attack pacing (seconds between strikes)
 const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, guardian: 2.4, chariot: 1.35 };
-const KILL_TEMPO = 1.7; // global lethality multiplier (per-hit = dmg * cd * tempo) — fights last
+const KILL_TEMPO = 2.1; // global lethality multiplier (per-hit = dmg * cd * tempo) — fights bite
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
 const MAX = 500;
@@ -1173,11 +1173,11 @@ export class Battle {
 	spawn(input: SpawnInput) {
 		const team: Team = input.kind === 'buy' || input.kind === 'bull' ? 'bull' : 'bear';
 		let tier = tierForPct(input.pct);
-		// on microcap tokens a few dollars can move 1% of supply — hold the top ranks to a
-		// dollar floor too, so GOD/TITAN spectacle stays rare enough to mean something
-		if (tier.name === 'GOD' && input.usd < 2000) tier = TIERS[1];
-		if (tier.name === 'TITAN' && input.usd < 400) tier = TIERS[2];
-		if (tier.name === 'CHAMPION' && input.usd < 150) tier = TIERS[3]; // dust doesn't ride a chariot
+		// RANK MUST BE EARNED IN DOLLARS. On a microcap a $12 trade can move 0.05% of
+		// supply — without a full dollar ladder every dust buy fields a chariot and the
+		// elites drown out the infantry. Supply share qualifies you; dollars cap you.
+		const cap = input.usd >= 3000 ? 'GOD' : input.usd >= 1000 ? 'TITAN' : input.usd >= 300 ? 'CHAMPION' : input.usd >= 60 ? 'ELITE' : 'SOLDIER';
+		if (rankIdx(tier.name) > rankIdx(cap)) tier = TIERS.find((t) => t.name === cap)!;
 		const god = tier.name === 'GOD';
 		const legend = god || tier.name === 'TITAN';
 		const cls = pickClass(tier.name, hash01(input.wallet + input.usd));
@@ -1395,7 +1395,7 @@ export class Battle {
 		const dist = Math.hypot(tx - sx, tz - sz);
 		const T = THREE.MathUtils.clamp(dist / 30, 0.45, 0.95), g = 18; // high, slow arcs — volleys hang in the air
 		p.active = true; p.x = sx; p.y = sy; p.z = sz;
-		p.dmg = u.dmg * ATK_CD.archer * KILL_TEMPO * 0.6; p.team = u.team; p.life = T + 0.25;
+		p.dmg = u.dmg * ATK_CD.archer * KILL_TEMPO * 0.6 * this.teamMul(u.team); p.team = u.team; p.life = T + 0.25;
 		p.vx = (tx - sx) / T; p.vz = (tz - sz) / T; p.vy = (ty - sy + 0.5 * g * T * T) / T;
 		// muzzle flash toward the target
 		this.spawnBurst(sx + ((tx - sx) / dist) * 1.1, sy, sz + ((tz - sz) / dist) * 1.1, new THREE.Color(0xffe9a0), 3);
@@ -1513,14 +1513,15 @@ export class Battle {
 		}
 
 		if (this.phase === 'battle') {
+			// THE LINE IS WON BY FIGHTING. Field power pushes the front and every kill
+			// shoves it; the price move since the campaign opened is the wind at the
+			// winner's back — it tilts reinforcements, sharpens the favored side's
+			// blades, and leans on the line — but soldiers, not candles, carry gates.
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
-			// PRICE IS THE PRIMARY DRIVER (NewHedge rule: "when price moves higher, the
-			// bulls advance toward higher markers"). The move since this campaign opened
-			// places the front on the mcap ladder; the fighting modulates around it.
-			const priceTerm = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 40, -1, 1) * FRONT_MAX * 0.8;
-			const target = THREE.MathUtils.clamp(priceTerm + delta * FRONT_MAX * 0.45, -FRONT_MAX, FRONT_MAX);
-			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.4);
+			const priceBias = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 30, -1, 1) * FRONT_MAX * 0.35;
+			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.9 + priceBias, -FRONT_MAX, FRONT_MAX);
+			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.5);
 			// a side reaches the enemy base → the theater falls
 			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
 			else if (this.frontX < -FRONT_MAX * 0.9) this.winCampaign('bear');
@@ -1528,9 +1529,11 @@ export class Battle {
 			this.resetCampaign();
 		}
 
-		// timeframe-driven reinforcements keep the war supplied (paused while a theater falls)
+		// timeframe-driven reinforcements keep the war supplied (paused while a theater
+		// falls). The pumping side musters faster — price is the recruiting sergeant.
 		if (this.phase === 'battle') {
-			this.accB += this.reinB * dt; this.accS += this.reinS * dt;
+			const tilt = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 50, -0.6, 0.6);
+			this.accB += this.reinB * (1 + tilt) * dt; this.accS += this.reinS * (1 - tilt) * dt;
 			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
 			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
 		}
@@ -1630,7 +1633,7 @@ export class Battle {
 						u.swingSide = -u.swingSide; // duelists alternate blades, others shift their stance
 						// the first blow after the horns lands in slow motion — the lines have met
 						if (this.awaitClash) { this.awaitClash = false; this.slowmo = Math.max(this.slowmo, 0.8); this.shake = Math.min(1.4, this.shake + 0.5); }
-						const per = u.dmg * ATK_CD[u.cls] * KILL_TEMPO;
+						const per = u.dmg * ATK_CD[u.cls] * KILL_TEMPO * this.teamMul(u.team);
 						const col = u.team === 'bull' ? GOLD : CRIMSON;
 						this.spawnBurst(t.x, hillY(t.x) + 1.1, t.z, col, u.cls === 'guardian' ? 12 : 5);
 						// knockback
@@ -1777,6 +1780,12 @@ export class Battle {
 
 	private isDueling(u: Unit): boolean { return u === this.duelA || u === this.duelB; }
 
+	// the pumping side fights with the gods' favor — its blades bite harder
+	private teamMul(team: Team): number {
+		const tilt = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 50, -0.5, 0.5);
+		return team === 'bull' ? 1 + tilt * 0.5 : 1 - tilt * 0.5;
+	}
+
 	// a dressed spearman keeps his great shield up between clashes — volleys glance off the wall
 	private guardMul(t: Unit): number {
 		if (t.cls !== 'spear') return 1;
@@ -1822,8 +1831,9 @@ export class Battle {
 		this.addDecal(u.x, u.z, u.scale);
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;
 		this.totalKills++;
-		// each casualty physically shoves the front toward the loser's base
-		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? 0.08 : -0.08), -FRONT_MAX, FRONT_MAX);
+		// each casualty physically shoves the front toward the loser's base — the
+		// fighting is what carries ground
+		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? 0.22 : -0.22), -FRONT_MAX, FRONT_MAX);
 		this.killFx.push({ x: u.x, z: u.z, team: u.team, until: performance.now() + 1200 });
 		if (this.killFx.length > 40) this.killFx.shift();
 		if (killers.length) { const killer = killers[(Math.random() * killers.length) | 0]; killer.kills++; if (killer.wallet) { const c = this.commanders.get(killer.wallet); if (c) c.kills++; } }
