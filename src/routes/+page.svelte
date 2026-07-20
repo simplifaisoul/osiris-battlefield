@@ -131,6 +131,9 @@
 			for (const t of trades.slice(0, 40)) (t.kind === 'buy' ? (b += t.usd) : (s += t.usd));
 			buyUsd = b; sellUsd = s;
 			battle?.setPressure(b, s); // live tape drives the front-line liquidity buffers
+			// bound the dedupe set over long sessions: re-seed it from the current tape
+			// and skip one spawn cycle rather than replaying 40 stale trades as new
+			if (seen.size > 4000) { seen.clear(); for (const t of trades) seen.add(t.tx); return; }
 			for (const t of [...trades].reverse()) {
 				if (seen.has(t.tx)) continue;
 				seen.add(t.tx);
@@ -211,6 +214,9 @@
 					audio?.volley(e.usd);
 				} else if (e.type === 'kill') {
 					audio?.kill(e.tier === 'TITAN' || e.tier === 'GOD');
+				} else if (e.type === 'sudden') {
+					pushFeed('THE GODS GROW IMPATIENT — SUDDEN DEATH, THE STRONG PREVAIL', e.team === 'bull' ? 'buy' : 'sell', '', true, undefined, '☥');
+					audio?.horn(false);
 				}
 			};
 			battle.onCampaign = (r) => {

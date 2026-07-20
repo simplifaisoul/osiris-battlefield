@@ -12,7 +12,7 @@ export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian' | 'chariot';
 export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: number; pct: number; quiet?: boolean };
 
 export type BattleEvent = {
-	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike' | 'volley';
+	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike' | 'volley' | 'sudden';
 	team: Team; tier: string; cls: Cls; wallet: string; usd: number; pct: number; god?: boolean;
 };
 
@@ -475,6 +475,8 @@ export class Battle {
 	private wonUntil = 0;
 	private winsBull = 0; private winsBear = 0;
 	private warClock = 0; private battlePhase: WarPhase = 'form';
+	// sudden death: 0 → 1 as a stalemated campaign overstays its welcome
+	private sudden = 0; private suddenAnnounced = false;
 	// massed archery: volleys loose together on a shared signal during the standoff phases
 	private volleyT = 3; private volleyWindow = 0; private volleyAnnounced = false;
 	// the first strike after the horns sound lands in slow motion
@@ -1520,7 +1522,14 @@ export class Battle {
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
 			const priceBias = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 30, -1, 1) * FRONT_MAX * 0.35;
-			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * 0.9 + priceBias, -FRONT_MAX, FRONT_MAX);
+			// NO ETERNAL STALEMATES: past five minutes the gods grow impatient — the
+			// stronger host snowballs harder and harder until a gate finally falls
+			this.sudden = THREE.MathUtils.clamp((this.warClock - 300) / 240, 0, 1);
+			if (this.sudden > 0 && !this.suddenAnnounced) {
+				this.suddenAnnounced = true;
+				this.onEvent?.({ type: 'sudden', team: delta >= 0 ? 'bull' : 'bear', tier: '', cls: 'spear', wallet: '', usd: 0, pct: 0 });
+			}
+			const target = THREE.MathUtils.clamp(delta * FRONT_MAX * (0.9 + this.sudden * 0.7) + priceBias, -FRONT_MAX, FRONT_MAX);
 			this.frontX += (target - this.frontX) * Math.min(1, dt * 0.5);
 			// a side reaches the enemy base → the theater falls
 			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
@@ -1531,9 +1540,15 @@ export class Battle {
 
 		// timeframe-driven reinforcements keep the war supplied (paused while a theater
 		// falls). The pumping side musters faster — price is the recruiting sergeant.
+		// THE WAR NEVER STARVES: a hard reinforcement floor holds even if every data
+		// API dies, and a broken host below fighting strength rallies fresh war bands.
 		if (this.phase === 'battle') {
 			const tilt = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 50, -0.6, 0.6);
-			this.accB += this.reinB * (1 + tilt) * dt; this.accS += this.reinS * (1 - tilt) * dt;
+			const FLOOR = 0.32;
+			this.accB += Math.max(this.reinB, FLOOR) * (1 + tilt) * dt;
+			this.accS += Math.max(this.reinS, FLOOR) * (1 - tilt) * dt;
+			if (bullCount < 24) this.accB += dt * (24 - bullCount) * 0.09;
+			if (bearCount < 24) this.accS += dt * (24 - bearCount) * 0.09;
 			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
 			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
 		}
@@ -1817,6 +1832,7 @@ export class Battle {
 		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
 		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
+		this.sudden = 0; this.suddenAnnounced = false;
 		// the next price-range battle opens around the latest price
 		this.momentumAnchor = this.momentum;
 		this.rebaseLadder();
@@ -1832,8 +1848,9 @@ export class Battle {
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;
 		this.totalKills++;
 		// each casualty physically shoves the front toward the loser's base — the
-		// fighting is what carries ground
-		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? 0.22 : -0.22), -FRONT_MAX, FRONT_MAX);
+		// fighting is what carries ground (and sudden death makes every loss count double)
+		const shove = 0.22 + this.sudden * 0.22;
+		this.frontX = THREE.MathUtils.clamp(this.frontX + (u.team === 'bear' ? shove : -shove), -FRONT_MAX, FRONT_MAX);
 		this.killFx.push({ x: u.x, z: u.z, team: u.team, until: performance.now() + 1200 });
 		if (this.killFx.length > 40) this.killFx.shift();
 		if (killers.length) { const killer = killers[(Math.random() * killers.length) | 0]; killer.kills++; if (killer.wallet) { const c = this.commanders.get(killer.wallet); if (c) c.kills++; } }
