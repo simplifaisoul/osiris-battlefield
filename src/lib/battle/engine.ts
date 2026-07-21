@@ -46,6 +46,8 @@ type Unit = {
 	tint: number; struck: number; swingSide: number;
 	// formation posting: quantized file (slot) across the field, rank depth (row) behind the front
 	lane: number; slot: number; row: number; frontJitter: number; flank: boolean;
+	// articulation: wheel/limb angle accumulator + last position (for distance-driven spin)
+	spin: number; px: number; pz: number;
 };
 
 // the war breathes like a real field battle:
@@ -229,25 +231,24 @@ function khopesh(p: Palette, side: number, scale = 1): THREE.BufferGeometry[] {
 	blade.rotateZ(side < 0 ? Math.PI * 0.9 : -0.25); blade.translate(0.76 * side * scale, 1.5 * scale, 0.1);
 	return [hilt, guard, blade];
 }
-function armPair(p: Palette, weaponSide = 1): THREE.BufferGeometry[] {
-	// chunky bronze arms with big fists and gold wrist cuffs
-	const aR = paint(new THREE.CylinderGeometry(0.11, 0.13, 0.5, 8), p.skin); aR.rotateZ(-0.9 * weaponSide); aR.translate(0.45 * weaponSide, 1.02, 0.06);
-	const cR = paint(new THREE.CylinderGeometry(0.12, 0.12, 0.09, 8), p.accent); cR.rotateZ(-0.9 * weaponSide); cR.translate(0.57 * weaponSide, 0.95, 0.08);
-	const fR = paint(new THREE.SphereGeometry(0.15, 8, 6), p.skin); fR.translate(0.62 * weaponSide, 0.9, 0.1);
-	const aL = paint(new THREE.CylinderGeometry(0.11, 0.13, 0.5, 8), p.skin); aL.rotateZ(0.9 * weaponSide); aL.translate(-0.45 * weaponSide, 1.02, 0.06);
-	const cL = paint(new THREE.CylinderGeometry(0.12, 0.12, 0.09, 8), p.accent); cL.rotateZ(0.9 * weaponSide); cL.translate(-0.57 * weaponSide, 0.95, 0.08);
-	const fL = paint(new THREE.SphereGeometry(0.15, 8, 6), p.skin); fL.translate(-0.62 * weaponSide, 0.9, 0.1);
-	return [aR, cR, fR, aL, cL, fL];
+// one chunky bronze arm with a big fist and a gold wrist cuff — side=1 right, side=-1 left
+function arm(p: Palette, side: number): THREE.BufferGeometry[] {
+	const a = paint(new THREE.CylinderGeometry(0.11, 0.13, 0.5, 8), p.skin); a.rotateZ(-0.9 * side); a.translate(0.45 * side, 1.02, 0.06);
+	const c = paint(new THREE.CylinderGeometry(0.12, 0.12, 0.09, 8), p.accent); c.rotateZ(-0.9 * side); c.translate(0.57 * side, 0.95, 0.08);
+	const f = paint(new THREE.SphereGeometry(0.15, 8, 6), p.skin); f.translate(0.62 * side, 0.9, 0.1);
+	return [a, c, f];
 }
+function armPair(p: Palette): THREE.BufferGeometry[] { return [...arm(p, 1), ...arm(p, -1)]; }
 
-function buildSpearman(p: Palette, bear: boolean): THREE.BufferGeometry {
-	const parts = [...chunkyBase(p), ...armPair(p), ...(bear ? hornedHelm(p) : khat(p, p.clothDark))];
-	// bronze-tipped war spear in the right fist
-	const shaft = paint(new THREE.CylinderGeometry(0.045, 0.045, 2.5, 6), p.wood); shaft.translate(0.62, 1.35, 0.1);
-	const tip = paint(new THREE.ConeGeometry(0.13, 0.44, 6), p.metal); tip.translate(0.62, 2.76, 0.1);
+// each fighter is a two-part action figure: a BODY and an articulated ACT part
+// (weapon arm, blade pair, bow arm, or wheels) that swings about a pivot per frame
+type UnitGeo = { body: THREE.BufferGeometry; act: THREE.BufferGeometry; pivot: [number, number, number]; spin?: boolean };
+
+function buildSpearman(p: Palette, bear: boolean): UnitGeo {
+	const parts = [...chunkyBase(p), ...arm(p, -1), ...(bear ? hornedHelm(p) : khat(p, p.clothDark))];
 	if (bear) {
 		// the bear line fights behind round hide shields
-		parts.push(shaft, tip, ...roundShield(p));
+		parts.push(...roundShield(p));
 	} else {
 		// tall Egyptian tower shield — rounded top, gold eye boss
 		const shield = paint(new THREE.BoxGeometry(0.72, 0.82, 0.08), p.clothDark); shield.translate(-0.68, 0.94, 0.08);
@@ -255,14 +256,19 @@ function buildSpearman(p: Palette, bear: boolean): THREE.BufferGeometry {
 		shTop.rotateX(Math.PI / 2); shTop.translate(-0.68, 1.35, 0.08);
 		const rim = paint(new THREE.BoxGeometry(0.78, 0.1, 0.1), p.accent); rim.translate(-0.68, 0.56, 0.08);
 		const boss = paint(new THREE.SphereGeometry(0.13, 8, 6), p.accent); boss.translate(-0.68, 1.02, 0.13);
-		parts.push(shaft, tip, shield, shTop, rim, boss);
+		parts.push(shield, shTop, rim, boss);
 	}
-	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
+	const body = mergeGeometries(parts, false)!; body.computeVertexNormals();
+	// ACT: spear arm — thrusts from the shoulder. Spear couched forward for the stab.
+	const shaft = paint(new THREE.CylinderGeometry(0.045, 0.045, 2.5, 6), p.wood); shaft.rotateZ(-0.45); shaft.translate(0.75, 1.28, 0.1);
+	const tip = paint(new THREE.ConeGeometry(0.13, 0.44, 6), p.metal); tip.rotateZ(-0.45); tip.translate(1.36, 2.53, 0.1);
+	const act = mergeGeometries([...arm(p, 1), shaft, tip], false)!; act.computeVertexNormals();
+	return { body, act, pivot: [0.4, 1.06, 0.06] };
 }
 
-function buildDuelist(p: Palette, bear: boolean): THREE.BufferGeometry {
-	// twin-khopesh blade dancer — both sickle-swords raised, dark iron pauldron spikes
-	const parts = [...chunkyBase(p), ...armPair(p), ...khopesh(p, 1), ...khopesh(p, -1)];
+function buildDuelist(p: Palette, bear: boolean): UnitGeo {
+	// twin-khopesh blade dancer — both sickle-swords carve as one articulated pair
+	const parts = [...chunkyBase(p)];
 	if (bear) {
 		// the southern blade dancers fight behind Set-beast masks
 		parts.push(...setMask(p));
@@ -281,26 +287,32 @@ function buildDuelist(p: Palette, bear: boolean): THREE.BufferGeometry {
 	// flowing back scarf in team linen
 	const scarf = paint(new THREE.BoxGeometry(0.5, 0.85, 0.1), p.cloth); scarf.rotateX(0.3); scarf.translate(0, 0.98, -0.34);
 	parts.push(scarf);
-	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
+	const body = mergeGeometries(parts, false)!; body.computeVertexNormals();
+	// ACT: both arms + both sickle-swords sweep together from the chest
+	const act = mergeGeometries([...armPair(p), ...khopesh(p, 1), ...khopesh(p, -1)], false)!; act.computeVertexNormals();
+	return { body, act, pivot: [0, 1.06, 0.04] };
 }
 
-function buildArcher(p: Palette, bear: boolean): THREE.BufferGeometry {
-	const parts = [...chunkyBase(p), ...armPair(p), ...(bear ? hood(p) : khat(p, p.cloth))];
-	// recurve bow of horn and gold in the right fist
-	const bow = paint(new THREE.TorusGeometry(0.78, 0.05, 8, 20, Math.PI * 1.2), p.wood); bow.rotateY(Math.PI / 2); bow.rotateX(-0.15); bow.translate(0.66, 1.15, 0.1);
-	const bt1 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); bt1.translate(0.66, 1.95, 0.25);
-	const bt2 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); bt2.translate(0.66, 0.38, 0.3);
+function buildArcher(p: Palette, bear: boolean): UnitGeo {
+	const parts = [...chunkyBase(p), ...arm(p, -1), ...(bear ? hood(p) : khat(p, p.cloth))];
 	// reed quiver on the back
 	const quiver = paint(new THREE.CylinderGeometry(0.12, 0.12, 0.55, 8), p.leather); quiver.rotateX(0.45); quiver.translate(-0.16, 1.3, -0.36);
 	const fl = paint(new THREE.BoxGeometry(0.2, 0.16, 0.06), p.cloth); fl.rotateX(0.45); fl.translate(-0.16, 1.62, -0.52);
-	parts.push(bow, bt1, bt2, quiver, fl);
-	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
+	parts.push(quiver, fl);
+	const body = mergeGeometries(parts, false)!; body.computeVertexNormals();
+	// ACT: bow arm — draws back at the shoulder and snaps forward on the loose
+	const bow = paint(new THREE.TorusGeometry(0.78, 0.05, 8, 20, Math.PI * 1.2), p.wood); bow.rotateY(Math.PI / 2); bow.rotateX(-0.15); bow.translate(0.66, 1.15, 0.1);
+	const bt1 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); bt1.translate(0.66, 1.95, 0.25);
+	const bt2 = paint(new THREE.SphereGeometry(0.07, 6, 5), p.accent); bt2.translate(0.66, 0.38, 0.3);
+	const nock = paint(new THREE.CylinderGeometry(0.03, 0.03, 1.05, 5), '#8a5a2b'); nock.rotateZ(Math.PI / 2 - 0.12); nock.translate(0.4, 1.18, 0.16);
+	const act = mergeGeometries([...arm(p, 1), bow, bt1, bt2, nock], false)!; act.computeVertexNormals();
+	return { body, act, pivot: [0.4, 1.06, 0.08] };
 }
 
-function buildGuardian(p: Palette, bear: boolean): THREE.BufferGeometry {
+function buildGuardian(p: Palette, bear: boolean): UnitGeo {
 	// WHALE AVATAR: bulls field the jackal of Anubis, bears the Set-beast — towering,
 	// gold-collared, great khopesh
-	const parts = [...chunkyBase(p), ...armPair(p)];
+	const parts = [...chunkyBase(p)];
 	const dark = '#4a4260'; // moonlit iron — dark, but never a black blob against the night field
 	// beast skull and muzzle over the head; the Set-beast's snout curves long and low
 	const skull = paint(new THREE.BoxGeometry(0.56, 0.5, 0.54), dark); skull.translate(0, 1.66, 0.02);
@@ -316,17 +328,19 @@ function buildGuardian(p: Palette, bear: boolean): THREE.BufferGeometry {
 	const eyeHex = bear ? '#ff6a76' : p.accent;
 	const ey1 = paint(new THREE.SphereGeometry(0.07, 6, 5), eyeHex); ey1.translate(-0.14, 1.72, 0.3);
 	const ey2 = paint(new THREE.SphereGeometry(0.07, 6, 5), eyeHex); ey2.translate(0.14, 1.72, 0.3);
-	// great khopesh in the right hand, ankh of judgement in the left
-	parts.push(...khopesh(p, 1, 1.25));
+	// ankh of judgement held in the left hand (body); the great khopesh arm articulates
 	const loop = paint(new THREE.TorusGeometry(0.13, 0.045, 6, 12), p.accent); loop.translate(-0.66, 1.32, 0.12);
 	const bar = paint(new THREE.BoxGeometry(0.34, 0.06, 0.06), p.accent); bar.translate(-0.66, 1.14, 0.12);
 	const stem = paint(new THREE.BoxGeometry(0.06, 0.34, 0.06), p.accent); stem.translate(-0.66, 0.94, 0.12);
 	parts.push(skull, snout, nose, ear1, ear2, in1, in2, ey1, ey2, loop, bar, stem);
-	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
+	const body = mergeGeometries([...parts, ...arm(p, -1)], false)!; body.computeVertexNormals();
+	// ACT: the great khopesh arm — winds far back and cleaves overhead
+	const act = mergeGeometries([...arm(p, 1), ...khopesh(p, 1, 1.25)], false)!; act.computeVertexNormals();
+	return { body, act, pivot: [0.4, 1.1, 0.06] };
 }
 
 // CHAMPION AVATAR: a horse-drawn war chariot — the battlefield's tank. Faces local +x.
-function buildChariot(p: Palette, bear: boolean): THREE.BufferGeometry {
+function buildChariot(p: Palette, bear: boolean): UnitGeo {
 	const parts: THREE.BufferGeometry[] = [];
 	const hide = bear ? '#3d2c1e' : '#6b4a2a';
 	const mane = bear ? '#1e1712' : '#3d2a16';
@@ -359,13 +373,6 @@ function buildChariot(p: Palette, bear: boolean): THREE.BufferGeometry {
 	const sideR = paint(new THREE.BoxGeometry(0.66, 0.4, 0.09), p.cloth); sideR.translate(-0.5, 0.84, -0.33);
 	const axle = paint(new THREE.CylinderGeometry(0.05, 0.05, 0.95, 6), mane); axle.rotateX(Math.PI / 2); axle.translate(-0.55, 0.42, 0);
 	parts.push(pole, deck, front, trim, sideL, sideR, axle);
-	// big spoked wheels with gold hubs
-	for (const s of [-1, 1]) {
-		const wheel = paint(new THREE.CylinderGeometry(0.42, 0.42, 0.08, 12), p.wood); wheel.rotateX(Math.PI / 2); wheel.translate(-0.55, 0.42, 0.44 * s);
-		const tyre = paint(new THREE.TorusGeometry(0.4, 0.05, 6, 14), mane); tyre.translate(-0.55, 0.42, 0.44 * s);
-		const hub = paint(new THREE.SphereGeometry(0.09, 6, 5), p.accent); hub.translate(-0.55, 0.42, 0.5 * s);
-		parts.push(wheel, tyre, hub);
-	}
 	// charioteer: compact rider braced on the deck, spear couched forward
 	const kilt = paint(new THREE.CylinderGeometry(0.24, 0.32, 0.34, 8), p.cloth); kilt.translate(-0.5, 1.0, 0);
 	const torso = paint(new THREE.CylinderGeometry(0.22, 0.26, 0.42, 8), p.skin); torso.translate(-0.5, 1.36, 0);
@@ -385,7 +392,22 @@ function buildChariot(p: Palette, bear: boolean): THREE.BufferGeometry {
 	const rShaft = paint(new THREE.CylinderGeometry(0.04, 0.04, 2.1, 6), p.wood); rShaft.rotateZ(Math.PI / 2 - 0.28); rShaft.translate(0.05, 1.5, 0.16);
 	const rTip = paint(new THREE.ConeGeometry(0.11, 0.36, 6), p.metal); rTip.rotateZ(-Math.PI / 2 + 0.28); rTip.translate(1.05, 1.22, 0.16);
 	parts.push(rShaft, rTip);
-	const m = mergeGeometries(parts, false)!; m.computeVertexNormals(); return m;
+	const bodyGeo = mergeGeometries(parts, false)!; bodyGeo.computeVertexNormals();
+	// ACT: spoked wheels + tyres + hubs — they SPIN with distance travelled. The spokes
+	// are what make the roll readable; centred on the axle so a z-rotation rolls them.
+	const wheelParts: THREE.BufferGeometry[] = [];
+	for (const s of [-1, 1]) {
+		const rim2 = paint(new THREE.TorusGeometry(0.4, 0.055, 6, 14), mane); rim2.translate(-0.55, 0.42, 0.44 * s);
+		const hub = paint(new THREE.SphereGeometry(0.09, 6, 5), p.accent); hub.translate(-0.55, 0.42, 0.5 * s);
+		for (let k = 0; k < 3; k++) {
+			const spoke = paint(new THREE.BoxGeometry(0.74, 0.07, 0.05), k === 0 ? p.accent : p.wood);
+			spoke.rotateZ((k / 3) * Math.PI); spoke.translate(-0.55, 0.42, 0.44 * s);
+			wheelParts.push(spoke);
+		}
+		wheelParts.push(rim2, hub);
+	}
+	const act = mergeGeometries(wheelParts, false)!; act.computeVertexNormals();
+	return { body: bodyGeo, act, pivot: [-0.55, 0.42, 0], spin: true };
 }
 
 function buildArrowGeo(): THREE.BufferGeometry {
@@ -452,7 +474,7 @@ export class Battle {
 	private camera: THREE.PerspectiveCamera;
 	private composer!: EffectComposer;
 
-	private armies: Record<string, { mesh: THREE.InstancedMesh; free: number[]; top: number }> = {};
+	private armies: Record<string, { mesh: THREE.InstancedMesh; act: THREE.InstancedMesh; pivot: THREE.Vector3; spin: boolean; free: number[]; top: number }> = {};
 	private units: Unit[] = [];
 	private frontX = 0;
 	private terrainH: (x: number, z: number) => number = () => 0;
@@ -504,6 +526,7 @@ export class Battle {
 	private capitalBull!: THREE.Group; private capitalBear!: THREE.Group; private frontLine!: THREE.Mesh;
 	private flags: THREE.Mesh[] = [];
 	private dummy = new THREE.Object3D(); private tmpColor = new THREE.Color();
+	private mA = new THREE.Matrix4(); private mB = new THREE.Matrix4();
 	private _camTarget = new THREE.Vector3(); private _camPos = new THREE.Vector3();
 	private q = new THREE.Quaternion(); private upV = new THREE.Vector3(0, 1, 0); private vTmp = new THREE.Vector3();
 
@@ -986,17 +1009,27 @@ export class Battle {
 	}
 
 	private buildArmies() {
-		const builders: Record<Cls, (p: Palette, bear: boolean) => THREE.BufferGeometry> = { spear: buildSpearman, duelist: buildDuelist, archer: buildArcher, guardian: buildGuardian, chariot: buildChariot };
+		const builders: Record<Cls, (p: Palette, bear: boolean) => UnitGeo> = { spear: buildSpearman, duelist: buildDuelist, archer: buildArcher, guardian: buildGuardian, chariot: buildChariot };
 		for (const team of ['bull', 'bear'] as Team[]) {
 			for (const cls of CLASSES) {
-				const mesh = new THREE.InstancedMesh(builders[cls](PAL[team], team === 'bear'), toonMaterial(), MAX);
-				mesh.castShadow = true; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.count = MAX;
+				const geo = builders[cls](PAL[team], team === 'bear');
 				this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
-				for (let i = 0; i < MAX; i++) { mesh.setMatrixAt(i, this.dummy.matrix); const v = 0.92 + Math.random() * 0.16; mesh.setColorAt(i, this.tmpColor.setScalar(v)); }
-				mesh.instanceMatrix.needsUpdate = true;
-				this.scene.add(mesh);
+				const mk = (g: THREE.BufferGeometry, shadow: boolean) => {
+					const m = new THREE.InstancedMesh(g, toonMaterial(), MAX);
+					// instanced culling tests the GEOMETRY's sphere at the origin, not the
+					// instances — armies span the whole board, so culling must be off or
+					// every unit vanishes the moment mid-field leaves the frustum
+					m.frustumCulled = false;
+					m.castShadow = shadow; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.count = MAX;
+					for (let i = 0; i < MAX; i++) { m.setMatrixAt(i, this.dummy.matrix); const v = 0.92 + Math.random() * 0.16; m.setColorAt(i, this.tmpColor.setScalar(v)); }
+					m.instanceMatrix.needsUpdate = true;
+					this.scene.add(m);
+					return m;
+				};
+				const mesh = mk(geo.body, true);
+				const act = mk(geo.act, false); // action parts skip the shadow pass — crowds stay cheap
 				const free: number[] = []; for (let i = 0; i < MAX; i++) free.push(MAX - 1 - i);
-				this.armies[`${team}:${cls}`] = { mesh, free, top: -1 };
+				this.armies[`${team}:${cls}`] = { mesh, act, pivot: new THREE.Vector3(...geo.pivot), spin: !!geo.spin, free, top: -1 };
 			}
 		}
 	}
@@ -1233,9 +1266,12 @@ export class Battle {
 			slot: Math.round(((Math.random() - 0.5) * (ARENA_Z * 2 - 6)) / 2.6) * 2.6,
 			row: cls === 'guardian' ? 0 : cls === 'spear' ? (Math.random() < 0.55 ? 0 : 1) : 2 + ((Math.random() * 2) | 0),
 			frontJitter: -3 + Math.random() * 14, // ranged skirmish depth
-			flank: !st.ranged && (cls === 'duelist' ? Math.random() < 0.3 : Math.random() < 0.08)
+			flank: !st.ranged && (cls === 'duelist' ? Math.random() < 0.3 : Math.random() < 0.08),
+			spin: Math.random() * Math.PI * 2, px: 0, pz: 0
 		});
-		return this.units[this.units.length - 1];
+		const u = this.units[this.units.length - 1];
+		u.px = u.x; u.pz = u.z;
+		return u;
 	}
 
 	start() { this.last = performance.now(); this.loop(); }
@@ -1828,8 +1864,8 @@ export class Battle {
 
 	private resetCampaign() {
 		this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
-		for (const u of this.units) this.armies[`${u.team}:${u.cls}`].mesh.setMatrixAt(u.idx, this.dummy.matrix);
-		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
+		for (const u of this.units) { const a = this.armies[`${u.team}:${u.cls}`]; a.mesh.setMatrixAt(u.idx, this.dummy.matrix); a.act.setMatrixAt(u.idx, this.dummy.matrix); }
+		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.act.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
 		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
 		this.sudden = 0; this.suddenAnnounced = false;
@@ -1893,7 +1929,8 @@ export class Battle {
 				// chariots don't chop — the whole rig rams forward on flat wheels.
 				const t = 1 - u.strike / 0.32; // 0 → 1 over the swing
 				const chariot = u.cls === 'chariot';
-				const swing = (t < 0.35 ? -t / 0.35 * 0.55 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'guardian' ? 0.95 : 0.7)) * (chariot ? 0.18 : 1);
+				// the arm carries the swing now — the body just leans into it
+			const swing = (t < 0.35 ? -t / 0.35 * 0.22 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'guardian' ? 0.4 : 0.28)) * (chariot ? 0.18 : 1);
 				const lungeF = t < 0.35 ? 0 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'duelist' ? 0.7 : chariot ? 0.9 : 0.4);
 				// duelists carve alternating diagonal arcs — left blade, then right
 				const roll = u.cls === 'duelist' ? Math.sin(t * Math.PI) * 0.5 * u.swingSide : 0;
@@ -1928,19 +1965,60 @@ export class Battle {
 				}
 			}
 			d.updateMatrix(); mesh.setMatrixAt(u.idx, d.matrix); dirty.add(mesh);
+
+			// ── ARTICULATION: the act part (weapon arm / blade pair / bow / wheels)
+			// rotates about its pivot in unit-local space, composed onto the body matrix
+			let ang = 0;
+			if (army.spin) {
+				// wheels roll with distance travelled (spokes make it read)
+				const dist = Math.hypot(u.x - u.px, u.z - u.pz);
+				if (u.dying <= 0) u.spin += dist / 0.42;
+				ang = -u.spin;
+			} else if (u.dying > 0) {
+				ang = 0; // the limb freezes; the whole figure flops via the body matrix
+			} else if (u.strike > 0) {
+				const t = 1 - u.strike / 0.32;
+				const amp = u.cls === 'guardian' ? 1.7 : u.cls === 'duelist' ? 1.25 : u.cls === 'archer' ? 0 : 1.0;
+				if (u.cls === 'archer') {
+					// draw held back, snapping home on the loose
+					ang = (1 - t) * 0.5;
+				} else {
+					// wind the arm up and back, then sweep it down through the target
+					const w = Math.min(1, t / 0.35);
+					const sPh = t < 0.35 ? 0 : (t - 0.35) / 0.65;
+					ang = (1 - sPh) * 0.6 * w - Math.sin(sPh * Math.PI) * amp;
+					if (u.cls === 'duelist') ang *= u.swingSide >= 0 ? 1 : 0.75; // alternating blades
+				}
+			} else {
+				// at rest the arm breathes with the body's cadence
+				ang = Math.sin(u.bob * (u.cls === 'duelist' ? 1.6 : 1.1)) * 0.07;
+			}
+			const pv = army.pivot;
+			this.mA.makeRotationZ(ang);
+			const e = this.mA.elements; // bake T(pivot)·Rz·T(−pivot) into one matrix
+			e[12] = pv.x - (e[0] * pv.x + e[4] * pv.y);
+			e[13] = pv.y - (e[1] * pv.x + e[5] * pv.y);
+			this.mB.multiplyMatrices(d.matrix, this.mA);
+			army.act.setMatrixAt(u.idx, this.mB); dirty.add(army.act);
+			u.px = u.x; u.pz = u.z;
+
 			// colour: hit-flash > tracked glow > base tint
-			if (u.struck > 0) mesh.setColorAt(u.idx, this.tmpColor.set(2.4, 2.2, 2.0));
-			else if (u.tracked) mesh.setColorAt(u.idx, this.tmpColor.set(1.6, 1.5, 1.1));
-			else mesh.setColorAt(u.idx, this.tmpColor.setScalar(u.tint));
+			if (u.struck > 0) this.tmpColor.set(2.4, 2.2, 2.0);
+			else if (u.tracked) this.tmpColor.set(1.6, 1.5, 1.1);
+			else this.tmpColor.setScalar(u.tint);
+			mesh.setColorAt(u.idx, this.tmpColor);
+			army.act.setColorAt(u.idx, this.tmpColor);
 		}
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i]; if (u.dying > 0 || u.hp > 0) continue;
 			const army = this.armies[`${u.team}:${u.cls}`];
-			this.dummy.scale.setScalar(0); this.dummy.updateMatrix(); army.mesh.setMatrixAt(u.idx, this.dummy.matrix); dirty.add(army.mesh); army.free.push(u.idx); this.units.splice(i, 1);
+			this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
+			army.mesh.setMatrixAt(u.idx, this.dummy.matrix); army.act.setMatrixAt(u.idx, this.dummy.matrix);
+			dirty.add(army.mesh); dirty.add(army.act); army.free.push(u.idx); this.units.splice(i, 1);
 		}
 		for (const m of dirty) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
 		// only draw the occupied slice of each army buffer — empty ranks cost nothing
-		for (const key in this.armies) { const a = this.armies[key]; a.mesh.count = a.top + 1; }
+		for (const key in this.armies) { const a = this.armies[key]; a.mesh.count = a.top + 1; a.act.count = a.top + 1; }
 	}
 
 	private render(dt: number) {
