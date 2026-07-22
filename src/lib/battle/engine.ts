@@ -31,7 +31,7 @@ export type Stats = {
 
 export type Overlay = {
 	tracked: { x: number; y: number; on: boolean; tier: string; team: Team; hp: number; maxHp: number; kills: number; wallet: string }[];
-	titans: { x: number; y: number; on: boolean; label: string; team: Team }[];
+	titans: { x: number; y: number; on: boolean; label: string; team: Team; hp: number; maxHp: number }[];
 	kills: { x: number; y: number; on: boolean; team: Team; age: number }[];
 };
 
@@ -1225,8 +1225,16 @@ export class Battle {
 		const legend = god || tier.name === 'TITAN';
 		const cls = pickClass(tier.name, hash01(input.wallet + input.usd));
 		const u = this.addUnit(team, cls, tier, input.wallet, legend, false);
-		// every real trade lands with a visible team-coloured muster flash
-		if (u) this.spawnBurst(u.x, groundY(u.x, u.z) + 1.2, u.z, team === 'bull' ? GOLD : CRIMSON, legend ? 26 : 6);
+		// every real trade lands with a visible team-coloured muster flash; a legend's
+		// awakening churns the earth — smoke rolls off the grave and souls rise
+		if (u) {
+			this.spawnBurst(u.x, groundY(u.x, u.z) + 1.2, u.z, team === 'bull' ? GOLD : CRIMSON, legend ? 26 : 6);
+			if (legend && !input.quiet) {
+				this.spawnSmoke(u.x, 0.6, u.z, 9);
+				for (let k = 0; k < 3; k++) this.spawnSoul(u.x + (Math.random() - 0.5) * 2, 1 + Math.random(), u.z + (Math.random() - 0.5) * 2, team === 'bull' ? GOLD : CRIMSON);
+				this.addDecal(u.x, u.z, 2.2);
+			}
+		}
 		if (input.wallet) {
 			// bounded roster — drop the least notable wallet when full
 			if (!this.commanders.has(input.wallet) && this.commanders.size >= 160) {
@@ -1279,8 +1287,9 @@ export class Battle {
 		});
 		const u = this.units[this.units.length - 1];
 		u.px = u.x; u.pz = u.z;
-		// legends walk the field as fully animated characters when the pool has room
-		if (legend) u.hero = this.heroes.claim(tier.name === 'GOD' ? 'mage' : 'warrior', team);
+		// legends walk the field as fully animated characters when the pool has room:
+		// gods rise as liches, champions as deathless warriors or blade-rogues
+		if (legend) u.hero = this.heroes.claim(tier.name === 'GOD' ? 'mage' : Math.random() < 0.5 ? 'warrior' : 'rogue', team);
 		return u;
 	}
 
@@ -1311,6 +1320,23 @@ export class Battle {
 	private spawnBurst(x: number, y: number, z: number, color: THREE.Color, n: number) {
 		for (let k = 0; k < n; k++) { const i = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N; this.sparkPos[i * 3] = x; this.sparkPos[i * 3 + 1] = y; this.sparkPos[i * 3 + 2] = z; this.sparkVel[i * 3] = (Math.random() - 0.5) * 9; this.sparkVel[i * 3 + 1] = 2 + Math.random() * 8; this.sparkVel[i * 3 + 2] = (Math.random() - 0.5) * 9; this.sparkLife[i] = 0.5 + Math.random() * 0.5; this.sparkColor[i * 3] = color.r; this.sparkColor[i * 3 + 1] = color.g; this.sparkColor[i * 3 + 2] = color.b; }
 	}
+	// a crackling line of HDR sparks from caster to victim — the lich's spell made visible
+	private magicBolt(sx: number, sy: number, sz: number, tx: number, ty: number, tz: number, team: Team) {
+		const col = team === 'bull' ? GOLD : CRIMSON;
+		const n = 14;
+		for (let k = 0; k < n; k++) {
+			const t = k / (n - 1);
+			const i = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N;
+			this.sparkPos[i * 3] = sx + (tx - sx) * t + (Math.random() - 0.5) * 0.7;
+			this.sparkPos[i * 3 + 1] = sy + (ty - sy) * t + Math.sin(t * Math.PI) * 1.1 + (Math.random() - 0.5) * 0.5;
+			this.sparkPos[i * 3 + 2] = sz + (tz - sz) * t + (Math.random() - 0.5) * 0.7;
+			this.sparkVel[i * 3] = 0; this.sparkVel[i * 3 + 1] = 0.6; this.sparkVel[i * 3 + 2] = 0;
+			this.sparkLife[i] = 0.2 + t * 0.12;
+			this.sparkColor[i * 3] = col.r * 2.2; this.sparkColor[i * 3 + 1] = col.g * 2.2; this.sparkColor[i * 3 + 2] = col.b * 2.2;
+		}
+		this.spawnBurst(tx, ty, tz, col, 7);
+	}
+
 	private spawnSoul(x: number, y: number, z: number, color: THREE.Color) {
 		const i = this.soulHead; this.soulHead = (this.soulHead + 1) % this.SOUL_N; this.soulPos[i * 3] = x; this.soulPos[i * 3 + 1] = y; this.soulPos[i * 3 + 2] = z; this.soulVel[i * 3] = (Math.random() - 0.5) * 0.6; this.soulVel[i * 3 + 1] = 2.4 + Math.random() * 1.4; this.soulVel[i * 3 + 2] = (Math.random() - 0.5) * 0.6; this.soulLife[i] = 2.2 + Math.random() * 1.2; const c = color.clone().lerp(new THREE.Color(0xffffff), 0.5); this.soulColor[i * 3] = c.r; this.soulColor[i * 3 + 1] = c.g; this.soulColor[i * 3 + 2] = c.b;
 	}
@@ -1932,6 +1958,10 @@ export class Battle {
 				else hs = 'idle';
 				const sink = u.dying > 0 && u.dying < 1 ? (1 - u.dying) * 0.9 : 0;
 				this.heroes.pose(u.hero, u.x, gy - sink, u.z, u.face, u.scale * UNIT_SCALE * 1.45, hs);
+				// a lich's strike is a spellcast — arc a crackling bolt into its victim
+				if (u.tier === 'GOD' && u.strike > 0.29 && u.target && u.target.dying <= 0) {
+					this.magicBolt(u.x, gy + 3.4, u.z, u.target.x, groundY(u.target.x, u.target.z) + 1.2, u.target.z, u.team);
+				}
 				continue;
 			}
 
@@ -2184,7 +2214,7 @@ export class Battle {
 		for (const u of this.units) {
 			if (u.dying > 0) continue;
 			if (u.tracked) { const p = project(u.x, hillY(u.x) + u.scale * 2.3, u.z); tracked.push({ x: p.x, y: p.y, on: p.on, tier: u.tier, team: u.team, hp: Math.max(0, u.hp), maxHp: u.maxHp, kills: u.kills, wallet: u.wallet }); }
-			else if (u.legend) { const p = project(u.x, hillY(u.x) + u.scale * 2.3, u.z); titans.push({ x: p.x, y: p.y, on: p.on, label: u.tier, team: u.team }); }
+			else if (u.legend) { const p = project(u.x, hillY(u.x) + u.scale * (u.hero >= 0 ? 3.3 : 2.3), u.z); titans.push({ x: p.x, y: p.y, on: p.on, label: u.tier, team: u.team, hp: Math.max(0, u.hp), maxHp: u.maxHp }); }
 		}
 		// floating casualty markers, rising as they fade
 		const now = performance.now();

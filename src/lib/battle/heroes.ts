@@ -8,17 +8,19 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
-export type HeroKind = 'warrior' | 'mage';
+export type HeroKind = 'warrior' | 'rogue' | 'mage';
 export type HeroState = 'spawn' | 'idle' | 'walk' | 'run' | 'attack' | 'death' | 'cheer';
 
 const HERO_MAX = 10;
-const SRC: Record<HeroKind, string> = { warrior: '/models/Skeleton_Warrior.glb', mage: '/models/Skeleton_Mage.glb' };
+const SRC: Record<HeroKind, string> = { warrior: '/models/Skeleton_Warrior.glb', rogue: '/models/Skeleton_Rogue.glb', mage: '/models/Skeleton_Mage.glb' };
 const ATTACKS: Record<HeroKind, string[]> = {
 	warrior: ['2H_Melee_Attack_Chop', '2H_Melee_Attack_Slice', '2H_Melee_Attack_Spin'],
+	rogue: ['1H_Melee_Attack_Stab', '1H_Melee_Attack_Slice_Diagonal', 'Dualwield_Melee_Attack_Stab'],
 	mage: ['Spellcast_Shoot', 'Spellcast_Raise']
 };
-const CLIP: Record<Exclude<HeroState, 'attack'>, string> = {
-	spawn: 'Skeletons_Awaken_Standing', idle: 'Idle_Combat', walk: 'Walking_D_Skeletons',
+const IDLE: Record<HeroKind, string> = { warrior: '2H_Melee_Idle', rogue: 'Idle_Combat', mage: 'Idle_Combat' };
+const CLIP: Record<Exclude<HeroState, 'attack' | 'idle'>, string> = {
+	spawn: 'Skeletons_Awaken_Standing', walk: 'Walking_D_Skeletons',
 	run: 'Running_A', death: 'Death_C_Skeletons', cheer: 'Cheer'
 };
 const ONESHOT: HeroState[] = ['spawn', 'attack', 'death'];
@@ -48,8 +50,9 @@ export class HeroPool {
 	async load(scene: THREE.Scene) {
 		this.scene = scene;
 		const loader = new GLTFLoader();
-		const [w, m] = await Promise.all([loader.loadAsync(SRC.warrior), loader.loadAsync(SRC.mage)]);
+		const [w, r, m] = await Promise.all([loader.loadAsync(SRC.warrior), loader.loadAsync(SRC.rogue), loader.loadAsync(SRC.mage)]);
 		this.templates.warrior = { scene: w.scene, clips: w.animations };
+		this.templates.rogue = { scene: r.scene, clips: r.animations };
 		this.templates.mage = { scene: m.scene, clips: m.animations };
 		this.ready = true;
 	}
@@ -100,7 +103,7 @@ export class HeroPool {
 		if (state === h.state) return;
 		// one-shots must finish before a same-priority state retriggers; death always wins
 		if (h.state && ONESHOT.includes(h.state) && state !== 'death' && h.action && !this.finished(h)) return;
-		const name = state === 'attack' ? ATTACKS[h.kind][(Math.random() * ATTACKS[h.kind].length) | 0] : CLIP[state];
+		const name = state === 'attack' ? ATTACKS[h.kind][(Math.random() * ATTACKS[h.kind].length) | 0] : state === 'idle' ? IDLE[h.kind] : CLIP[state];
 		const clip = THREE.AnimationClip.findByName(h.clips, name); if (!clip) return;
 		const next = h.mixer.clipAction(clip);
 		next.reset();

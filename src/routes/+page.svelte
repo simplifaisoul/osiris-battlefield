@@ -201,8 +201,8 @@
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
 				if (e.type === 'legend') {
-					const c = e.cls === 'guardian' ? 'GUARDIAN' : e.cls.toUpperCase();
-					pushFeed(`${e.tier} ${c} AWAKENS — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true, undefined, '◆');
+					const c = e.god ? 'LICH OF THE DUAT AWAKENS' : 'DEATHLESS CHAMPION RISES';
+					pushFeed(`${c} — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true, undefined, e.god ? '𓂀' : '◆');
 					audio?.horn(!!e.god); if (e.god) doFlash();
 				} else if (e.type === 'duel') {
 					pushFeed(`SINGLE COMBAT BEFORE THE HOSTS — ${e.tier}`, 'buy', '', true, undefined, '⚔');
@@ -251,7 +251,12 @@
 
 <div class="labels">
 	{#each overlay.titans.slice(0, 10) as t}
-		{#if t.on}<div class="titan-label" class:bear={t.team === 'bear'} style="transform:translate3d({t.x}px,{t.y}px,0) translate(-50%,-100%)">{t.label}</div>{/if}
+		{#if t.on}
+			<div class="titan-label" class:bear={t.team === 'bear'} style="transform:translate3d({t.x}px,{t.y}px,0) translate(-50%,-100%)">
+				{t.label}
+				<div class="ti-hp" class:bear={t.team === 'bear'}><span style="width:{(t.hp / t.maxHp) * 100}%"></span></div>
+			</div>
+		{/if}
 	{/each}
 	{#each overlay.tracked.slice(0, 8) as u}
 		{#if u.on}
@@ -481,8 +486,12 @@
 	.cine { position: fixed; inset: 0; z-index: 1; pointer-events: none;
 		background: linear-gradient(to bottom, rgba(2,1,4,0.55), transparent 12%), linear-gradient(to top, rgba(2,1,4,0.6), transparent 16%); }
 	.labels { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
-	.titan-label { position: absolute; left: 0; top: 0; will-change: transform; font-family: var(--display); font-size: 12px; font-weight: 800; color: #7dffb0; text-shadow: 0 0 10px rgba(20,241,149,0.8), 0 2px 4px #000; white-space: nowrap; }
+	.titan-label { position: absolute; left: 0; top: 0; will-change: transform; font-family: var(--display); font-size: 12px; font-weight: 800; color: #7dffb0; text-shadow: 0 0 10px rgba(20,241,149,0.8), 0 2px 4px #000; white-space: nowrap; text-align: center; }
 	.titan-label.bear { color: #ff9aa6; text-shadow: 0 0 10px rgba(255,77,94,0.8), 0 2px 4px #000; }
+	.ti-hp { width: 46px; height: 3px; border-radius: 2px; background: rgba(0,0,0,0.65); margin: 2px auto 0; overflow: hidden; border: 1px solid rgba(20,241,149,0.45); }
+	.ti-hp span { display: block; height: 100%; background: var(--green); transition: width 0.3s ease; }
+	.ti-hp.bear { border-color: rgba(255,77,94,0.45); }
+	.ti-hp.bear span { background: var(--crimson); }
 	.track-label { position: absolute; left: 0; top: 0; will-change: transform; text-align: center; white-space: nowrap; }
 	.tl-tier { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 8px var(--green), 0 2px 3px #000; }
 	.tl-hp { width: 44px; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.6); margin: 3px auto 0; overflow: hidden; border: 1px solid rgba(20,241,149,0.5); }
