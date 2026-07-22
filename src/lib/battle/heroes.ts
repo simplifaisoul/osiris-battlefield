@@ -8,17 +8,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
-export type HeroKind = 'warrior' | 'rogue' | 'mage';
+export type HeroKind = 'warrior' | 'rogue';
 export type HeroState = 'spawn' | 'idle' | 'walk' | 'run' | 'attack' | 'death' | 'cheer';
 
 const HERO_MAX = 10;
-const SRC: Record<HeroKind, string> = { warrior: '/models/Skeleton_Warrior.glb', rogue: '/models/Skeleton_Rogue.glb', mage: '/models/Skeleton_Mage.glb' };
+const SRC: Record<HeroKind, string> = { warrior: '/models/Skeleton_Warrior.glb', rogue: '/models/Skeleton_Rogue.glb' };
 const ATTACKS: Record<HeroKind, string[]> = {
 	warrior: ['2H_Melee_Attack_Chop', '2H_Melee_Attack_Slice', '2H_Melee_Attack_Spin'],
-	rogue: ['1H_Melee_Attack_Stab', '1H_Melee_Attack_Slice_Diagonal', 'Dualwield_Melee_Attack_Stab'],
-	mage: ['Spellcast_Shoot', 'Spellcast_Raise']
+	rogue: ['1H_Melee_Attack_Stab', '1H_Melee_Attack_Slice_Diagonal', 'Dualwield_Melee_Attack_Stab']
 };
-const IDLE: Record<HeroKind, string> = { warrior: '2H_Melee_Idle', rogue: 'Idle_Combat', mage: 'Idle_Combat' };
+const IDLE: Record<HeroKind, string> = { warrior: '2H_Melee_Idle', rogue: 'Idle_Combat' };
 const CLIP: Record<Exclude<HeroState, 'attack' | 'idle'>, string> = {
 	spawn: 'Skeletons_Awaken_Standing', walk: 'Walking_D_Skeletons',
 	run: 'Running_A', death: 'Death_C_Skeletons', cheer: 'Cheer'
@@ -50,10 +49,9 @@ export class HeroPool {
 	async load(scene: THREE.Scene) {
 		this.scene = scene;
 		const loader = new GLTFLoader();
-		const [w, r, m] = await Promise.all([loader.loadAsync(SRC.warrior), loader.loadAsync(SRC.rogue), loader.loadAsync(SRC.mage)]);
+		const [w, r] = await Promise.all([loader.loadAsync(SRC.warrior), loader.loadAsync(SRC.rogue)]);
 		this.templates.warrior = { scene: w.scene, clips: w.animations };
 		this.templates.rogue = { scene: r.scene, clips: r.animations };
-		this.templates.mage = { scene: m.scene, clips: m.animations };
 		this.ready = true;
 	}
 

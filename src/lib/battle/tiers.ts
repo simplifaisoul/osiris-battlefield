@@ -8,10 +8,10 @@ export type Tier = {
 	glyph: string;
 };
 
-// Highest first. Scales stay close — rank shows through auras, labels and gear, not size.
+// Highest first. Scales stay close — rank shows through gear and heroes, not size.
+// TITAN is the apex: the greatest whales take the field as deathless champions.
 export const TIERS: Tier[] = [
-	{ name: 'GOD', min: 1.0, scale: 1.45, hp: 3000, dmg: 90, glyph: '𓂀' },
-	{ name: 'TITAN', min: 0.25, scale: 1.28, hp: 1300, dmg: 46, glyph: '𓉔' },
+	{ name: 'TITAN', min: 0.25, scale: 1.36, hp: 1800, dmg: 60, glyph: '𓉔' },
 	{ name: 'CHAMPION', min: 0.05, scale: 1.14, hp: 560, dmg: 22, glyph: '𓋹' },
 	{ name: 'ELITE', min: 0.01, scale: 1.02, hp: 240, dmg: 11, glyph: '𓆃' },
 	{ name: 'SOLDIER', min: 0, scale: 0.92, hp: 95, dmg: 6, glyph: '𓀀' }

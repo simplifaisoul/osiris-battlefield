@@ -175,7 +175,7 @@
 		const t = overlay.tracked;
 		if (!t.length) return null;
 		const kills = t.reduce((a, u) => a + u.kills, 0);
-		const order = ['SOLDIER', 'ELITE', 'CHAMPION', 'TITAN', 'GOD', 'GARRISON'];
+		const order = ['SOLDIER', 'ELITE', 'CHAMPION', 'TITAN', 'GARRISON'];
 		const best = t.reduce((a, u) => (order.indexOf(u.tier) > order.indexOf(a) ? u.tier : a), 'SOLDIER');
 		return { count: t.length, kills, best };
 	});
@@ -210,21 +210,20 @@
 			battle.onOverlay = (o) => (overlay = o);
 			battle.onEvent = (e: BattleEvent) => {
 				if (e.type === 'legend') {
-					const c = e.god ? 'LICH OF THE DUAT AWAKENS' : 'DEATHLESS CHAMPION RISES';
-					pushFeed(`${c} — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true, undefined, e.god ? '𓂀' : '◆');
-					audio?.horn(!!e.god); if (e.god) doFlash();
+					pushFeed(`DEATHLESS CHAMPION RISES — ${mask(e.wallet)} moved ${pctStr(e.pct)}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true, undefined, '◆');
+					audio?.horn(false);
 				} else if (e.type === 'duel') {
 					pushFeed(`SINGLE COMBAT BEFORE THE HOSTS — ${e.tier}`, 'buy', '', true, undefined, '⚔');
 				} else if (e.type === 'strike') {
 					const hit = e.team === 'bull' ? 'THE BEARS' : 'THE BULLS';
-					pushFeed(e.god ? `SPEAR OF RA ANNIHILATES ${hit}` : `FALCON OF HORUS DIVES ON ${hit}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true, undefined, e.god ? '☀' : '𓅃');
-					audio?.strike(!!e.god);
+					pushFeed(`FALCON OF WAR DIVES ON ${hit}`, e.team === 'bull' ? 'buy' : 'sell', fmtUsd(e.usd), true, undefined, '𓅃');
+					audio?.strike(false);
 				} else if (e.type === 'volley') {
 					audio?.volley(e.usd);
 				} else if (e.type === 'kill') {
-					audio?.kill(e.tier === 'TITAN' || e.tier === 'GOD');
+					audio?.kill(e.tier === 'TITAN');
 				} else if (e.type === 'sudden') {
-					pushFeed('THE GODS GROW IMPATIENT — SUDDEN DEATH, THE STRONG PREVAIL', e.team === 'bull' ? 'buy' : 'sell', '', true, undefined, '☥');
+					pushFeed('NO QUARTER — SUDDEN DEATH, THE STRONG PREVAIL', e.team === 'bull' ? 'buy' : 'sell', '', true, undefined, '☥');
 					audio?.horn(false);
 				}
 			};
@@ -308,7 +307,7 @@
 				<span class="ichip"><i class="live-dot"></i> LIVE ORDER FLOW</span>
 				<span class="ichip">𓅃 WHALE SKY STRIKES</span>
 				<span class="ichip">⛨ WAR CHARIOTS</span>
-				<span class="ichip">☀ GOD BEAMS</span>
+				<span class="ichip">𓅃 FALCON STRIKES</span>
 			</div>
 			<p class="intro-lore">
 				Every <span class="green">buy</span> deploys a soldier for the <span class="green">bulls</span>;

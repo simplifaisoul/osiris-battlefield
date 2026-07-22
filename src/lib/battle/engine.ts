@@ -14,7 +14,7 @@ export type SpawnInput = { wallet: string; kind: Team | 'buy' | 'sell'; usd: num
 
 export type BattleEvent = {
 	type: 'spawn' | 'kill' | 'legend' | 'duel' | 'strike' | 'volley' | 'sudden';
-	team: Team; tier: string; cls: Cls; wallet: string; usd: number; pct: number; god?: boolean;
+	team: Team; tier: string; cls: Cls; wallet: string; usd: number; pct: number;
 };
 
 export type Commander = { wallet: string; kills: number; tier: string; team: Team };
@@ -110,7 +110,7 @@ function hash01(s: string): number {
 	return (h >>> 0) / 4294967296;
 }
 function pickClass(tier: string, seed: number): Cls {
-	if (tier === 'TITAN' || tier === 'GOD') return 'guardian';
+	if (tier === 'TITAN') return 'guardian';
 	if (tier === 'CHAMPION') return 'chariot'; // champions ride to war
 	// melee-forward mix: the war is decided blade to blade, archers in support
 	if (seed < 0.34) return 'spear';
@@ -641,8 +641,8 @@ export class Battle {
 
 		// dynamic combat lights: a fixed pool, all added now at intensity 0 so
 		// brightening them later never re-permutes the material shaders (the whole
-		// point — the render pipeline must never hitch or blow out). Strikes, beams,
-		// and lich casts flare these so the night actually reacts to the fighting.
+		// point — the render pipeline must never hitch or blow out). Falcon strikes
+		// and their impacts flare these so the night actually reacts to the fighting.
 		for (let i = 0; i < this.FXLIGHT_N; i++) {
 			const l = new THREE.PointLight(0xffffff, 0, 46, 2);
 			l.position.set(0, -999, 0);
@@ -1253,10 +1253,9 @@ export class Battle {
 		// RANK MUST BE EARNED IN DOLLARS. On a microcap a $12 trade can move 0.05% of
 		// supply — without a full dollar ladder every dust buy fields a chariot and the
 		// elites drown out the infantry. Supply share qualifies you; dollars cap you.
-		const cap = input.usd >= 3000 ? 'GOD' : input.usd >= 1000 ? 'TITAN' : input.usd >= 300 ? 'CHAMPION' : input.usd >= 60 ? 'ELITE' : 'SOLDIER';
+		const cap = input.usd >= 1000 ? 'TITAN' : input.usd >= 300 ? 'CHAMPION' : input.usd >= 60 ? 'ELITE' : 'SOLDIER';
 		if (rankIdx(tier.name) > rankIdx(cap)) tier = TIERS.find((t) => t.name === cap)!;
-		const god = tier.name === 'GOD';
-		const legend = god || tier.name === 'TITAN';
+		const legend = tier.name === 'TITAN';
 		const cls = pickClass(tier.name, hash01(input.wallet + input.usd));
 		const u = this.addUnit(team, cls, tier, input.wallet, legend, false);
 		// every real trade lands with a visible team-coloured muster flash; a legend's
@@ -1283,12 +1282,12 @@ export class Battle {
 		}
 		// quiet spawns replay history on page load — units muster without the fireworks
 		if (input.quiet) return;
-		if (legend) { this.shake = Math.min(1.6, this.shake + (god ? 1.4 : 0.7)); if (god) { this.slowmo = 1.1; this.zoomPunch = 1; } }
-		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
-		// a whale entering the field calls down a sky strike on the enemy host
+		if (legend) { this.shake = Math.min(1.6, this.shake + 0.9); this.zoomPunch = 0.7; }
+		this.onEvent?.({ type: legend ? 'legend' : 'spawn', team, tier: tier.name, cls, wallet: input.wallet, usd: input.usd, pct: input.pct });
+		// a champion entering the field calls down a falcon dive on the enemy host
 		if (legend) {
-			this.skyStrike(team, god);
-			this.onEvent?.({ type: 'strike', team, tier: god ? 'GOD' : 'TITAN', cls, wallet: input.wallet, usd: input.usd, pct: input.pct, god });
+			this.skyStrike(team);
+			this.onEvent?.({ type: 'strike', team, tier: 'TITAN', cls, wallet: input.wallet, usd: input.usd, pct: input.pct });
 		}
 	}
 
@@ -1321,9 +1320,9 @@ export class Battle {
 		});
 		const u = this.units[this.units.length - 1];
 		u.px = u.x; u.pz = u.z;
-		// legends walk the field as fully animated characters when the pool has room:
-		// gods rise as liches, champions as deathless warriors or blade-rogues
-		if (legend) u.hero = this.heroes.claim(tier.name === 'GOD' ? 'mage' : Math.random() < 0.5 ? 'warrior' : 'rogue', team);
+		// champions walk the field as fully animated characters when the pool has room:
+		// deathless warriors or blade-rogues risen for the war
+		if (legend) u.hero = this.heroes.claim(Math.random() < 0.5 ? 'warrior' : 'rogue', team);
 		return u;
 	}
 
@@ -1354,27 +1353,6 @@ export class Battle {
 	private spawnBurst(x: number, y: number, z: number, color: THREE.Color, n: number) {
 		for (let k = 0; k < n; k++) { const i = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N; this.sparkPos[i * 3] = x; this.sparkPos[i * 3 + 1] = y; this.sparkPos[i * 3 + 2] = z; this.sparkVel[i * 3] = (Math.random() - 0.5) * 9; this.sparkVel[i * 3 + 1] = 2 + Math.random() * 8; this.sparkVel[i * 3 + 2] = (Math.random() - 0.5) * 9; this.sparkLife[i] = 0.5 + Math.random() * 0.5; this.sparkColor[i * 3] = color.r; this.sparkColor[i * 3 + 1] = color.g; this.sparkColor[i * 3 + 2] = color.b; }
 	}
-	// a crackling line of HDR sparks from caster to victim — the lich's spell made visible
-	private magicBolt(sx: number, sy: number, sz: number, tx: number, ty: number, tz: number, team: Team) {
-		const col = team === 'bull' ? GOLD : CRIMSON;
-		const n = 14;
-		for (let k = 0; k < n; k++) {
-			const t = k / (n - 1);
-			const i = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N;
-			this.sparkPos[i * 3] = sx + (tx - sx) * t + (Math.random() - 0.5) * 0.7;
-			this.sparkPos[i * 3 + 1] = sy + (ty - sy) * t + Math.sin(t * Math.PI) * 1.1 + (Math.random() - 0.5) * 0.5;
-			this.sparkPos[i * 3 + 2] = sz + (tz - sz) * t + (Math.random() - 0.5) * 0.7;
-			this.sparkVel[i * 3] = 0; this.sparkVel[i * 3 + 1] = 0.6; this.sparkVel[i * 3 + 2] = 0;
-			this.sparkLife[i] = 0.2 + t * 0.12;
-			this.sparkColor[i * 3] = col.r * 2.2; this.sparkColor[i * 3 + 1] = col.g * 2.2; this.sparkColor[i * 3 + 2] = col.b * 2.2;
-		}
-		this.spawnBurst(tx, ty, tz, col, 7);
-		// the spell flares light at the staff and where it lands
-		const hex = team === 'bull' ? 0x7dffb0 : 0xff7a86;
-		this.flareLight(sx, sy, sz, hex, 4.5, 20, 0.28);
-		this.flareLight(tx, ty + 0.6, tz, hex, 4, 18, 0.3);
-	}
-
 	private spawnSoul(x: number, y: number, z: number, color: THREE.Color) {
 		const i = this.soulHead; this.soulHead = (this.soulHead + 1) % this.SOUL_N; this.soulPos[i * 3] = x; this.soulPos[i * 3 + 1] = y; this.soulPos[i * 3 + 2] = z; this.soulVel[i * 3] = (Math.random() - 0.5) * 0.6; this.soulVel[i * 3 + 1] = 2.4 + Math.random() * 1.4; this.soulVel[i * 3 + 2] = (Math.random() - 0.5) * 0.6; this.soulLife[i] = 2.2 + Math.random() * 1.2; const c = color.clone().lerp(new THREE.Color(0xffffff), 0.5); this.soulColor[i * 3] = c.r; this.soulColor[i * 3 + 1] = c.g; this.soulColor[i * 3 + 2] = c.b;
 	}
@@ -1402,12 +1380,12 @@ export class Battle {
 
 	// ---------- sky strikes (whale events) ----------
 
-	// TITAN buy/sell → a falcon comet dives on the enemy host; GOD → the Spear of Ra,
-	// a sky-beam that annihilates a knot of enemies. The market's biggest orders land
-	// as unmissable battlefield events, scaled like NewHedge's liquidation strikes.
-	private strikesFx: { mode: 'comet' | 'beam'; t: number; dur: number; sx: number; sy: number; sz: number; tx: number; ty: number; tz: number; team: Team; god: boolean; mesh: THREE.Mesh; hit: boolean }[] = [];
+	// A TITAN buy/sell sends a falcon of war diving out of the night onto the enemy
+	// host — the market's biggest orders land as unmissable battlefield events,
+	// scaled like NewHedge's liquidation strikes.
+	private strikesFx: { t: number; dur: number; sx: number; sy: number; sz: number; tx: number; ty: number; tz: number; team: Team; mesh: THREE.Mesh; hit: boolean }[] = [];
 
-	private skyStrike(team: Team, god: boolean) {
+	private skyStrike(team: Team) {
 		if (this.strikesFx.length >= 4) return;
 		const foes: Unit[] = [];
 		for (const u of this.units) if (u.team !== team && u.dying <= 0) foes.push(u);
@@ -1421,24 +1399,13 @@ export class Battle {
 		}
 		const tx = best.x, tz = best.z, ty = groundY(tx, tz);
 		const col = team === 'bull' ? 0xffe08a : 0xff8a95;
-		if (god) {
-			const geo = new THREE.CylinderGeometry(1.7, 2.6, 90, 12, 1, true);
-			const mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-			const mesh = new THREE.Mesh(geo, mat);
-			mesh.position.set(tx, ty + 45, tz);
-			this.scene.add(mesh);
-			// the pillar of Ra lights the ground beneath it for its whole burn
-			this.flareLight(tx, ty + 3, tz, col, 13, 48, 1.05);
-			this.strikesFx.push({ mode: 'beam', t: 0, dur: 1.1, sx: tx, sy: ty + 45, sz: tz, tx, ty, tz, team, god, mesh, hit: false });
-		} else {
-			const geo = new THREE.OctahedronGeometry(0.9, 0); geo.scale(1, 2.6, 1);
-			const mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
-			const mesh = new THREE.Mesh(geo, mat);
-			const sx = tx - sign * 42, sy = ty + 34, sz = tz + (Math.random() - 0.5) * 24;
-			mesh.position.set(sx, sy, sz);
-			this.scene.add(mesh);
-			this.strikesFx.push({ mode: 'comet', t: 0, dur: 0.55, sx, sy, sz, tx, ty, tz, team, god, mesh, hit: false });
-		}
+		const geo = new THREE.OctahedronGeometry(1.0, 0); geo.scale(1, 2.8, 1);
+		const mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+		const mesh = new THREE.Mesh(geo, mat);
+		const sx = tx - sign * 44, sy = ty + 36, sz = tz + (Math.random() - 0.5) * 24;
+		mesh.position.set(sx, sy, sz);
+		this.scene.add(mesh);
+		this.strikesFx.push({ t: 0, dur: 0.55, sx, sy, sz, tx, ty, tz, team, mesh, hit: false });
 	}
 
 	private updateStrikes(dt: number) {
@@ -1446,32 +1413,23 @@ export class Battle {
 			const s = this.strikesFx[i];
 			s.t += dt;
 			const k = Math.min(1, s.t / s.dur);
-			if (s.mode === 'comet') {
-				// dive along a shallow arc, trailing embers
-				const x = THREE.MathUtils.lerp(s.sx, s.tx, k);
-				const y = THREE.MathUtils.lerp(s.sy, s.ty + 0.5, k * k);
-				const z = THREE.MathUtils.lerp(s.sz, s.tz, k);
-				s.mesh.position.set(x, y, z);
-				this.vTmp.set(s.tx - s.sx, (s.ty - s.sy) * 2 * k, s.tz - s.sz).normalize();
-				this.q.setFromUnitVectors(this.upV, this.vTmp);
-				s.mesh.quaternion.copy(this.q);
-				const c = s.team === 'bull' ? GOLD : CRIMSON;
-				for (let n = 0; n < 3; n++) {
-					const ti = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N;
-					this.sparkPos[ti * 3] = x + (Math.random() - 0.5); this.sparkPos[ti * 3 + 1] = y + (Math.random() - 0.5); this.sparkPos[ti * 3 + 2] = z + (Math.random() - 0.5);
-					this.sparkVel[ti * 3] = 0; this.sparkVel[ti * 3 + 1] = 1; this.sparkVel[ti * 3 + 2] = 0;
-					this.sparkLife[ti] = 0.25 + Math.random() * 0.2;
-					this.sparkColor[ti * 3] = c.r * 2; this.sparkColor[ti * 3 + 1] = c.g * 2; this.sparkColor[ti * 3 + 2] = c.b * 2;
-				}
-				if (k >= 1 && !s.hit) { s.hit = true; this.strikeImpact(s.team, s.tx, s.tz, false); }
-			} else {
-				// beam: flash in, hold, fade — impact lands as the beam reaches full burn
-				const op = k < 0.2 ? k / 0.2 : k > 0.7 ? (1 - k) / 0.3 : 1;
-				(s.mesh.material as THREE.MeshBasicMaterial).opacity = op * 0.85;
-				s.mesh.scale.x = s.mesh.scale.z = 0.7 + Math.sin(this.time * 30) * 0.12 + k * 0.5;
-				s.mesh.rotation.y += dt * 3;
-				if (k >= 0.25 && !s.hit) { s.hit = true; this.strikeImpact(s.team, s.tx, s.tz, true); }
+			// dive along a shallow arc, trailing embers
+			const x = THREE.MathUtils.lerp(s.sx, s.tx, k);
+			const y = THREE.MathUtils.lerp(s.sy, s.ty + 0.5, k * k);
+			const z = THREE.MathUtils.lerp(s.sz, s.tz, k);
+			s.mesh.position.set(x, y, z);
+			this.vTmp.set(s.tx - s.sx, (s.ty - s.sy) * 2 * k, s.tz - s.sz).normalize();
+			this.q.setFromUnitVectors(this.upV, this.vTmp);
+			s.mesh.quaternion.copy(this.q);
+			const c = s.team === 'bull' ? GOLD : CRIMSON;
+			for (let n = 0; n < 3; n++) {
+				const ti = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N;
+				this.sparkPos[ti * 3] = x + (Math.random() - 0.5); this.sparkPos[ti * 3 + 1] = y + (Math.random() - 0.5); this.sparkPos[ti * 3 + 2] = z + (Math.random() - 0.5);
+				this.sparkVel[ti * 3] = 0; this.sparkVel[ti * 3 + 1] = 1; this.sparkVel[ti * 3 + 2] = 0;
+				this.sparkLife[ti] = 0.25 + Math.random() * 0.2;
+				this.sparkColor[ti * 3] = c.r * 2; this.sparkColor[ti * 3 + 1] = c.g * 2; this.sparkColor[ti * 3 + 2] = c.b * 2;
 			}
+			if (k >= 1 && !s.hit) { s.hit = true; this.strikeImpact(s.team, s.tx, s.tz); }
 			if (k >= 1) {
 				this.scene.remove(s.mesh);
 				s.mesh.geometry.dispose();
@@ -1481,16 +1439,16 @@ export class Battle {
 		}
 	}
 
-	private strikeImpact(team: Team, x: number, z: number, god: boolean) {
+	private strikeImpact(team: Team, x: number, z: number) {
 		const col = team === 'bull' ? GOLD : CRIMSON;
-		this.spawnBurst(x, groundY(x, z) + 1, z, col, god ? 130 : 60);
-		this.spawnSmoke(x, groundY(x, z) + 1.2, z, god ? 16 : 9);
-		this.addDecal(x, z, god ? 3 : 1.8);
-		this.shake = Math.min(2, this.shake + (god ? 1.5 : 0.8));
+		this.spawnBurst(x, groundY(x, z) + 1, z, col, 90);
+		this.spawnSmoke(x, groundY(x, z) + 1.2, z, 13);
+		this.addDecal(x, z, 2.4);
+		this.shake = Math.min(2, this.shake + 1.1);
 		// the explosion throws real light across the field
-		this.flareLight(x, groundY(x, z) + 2.5, z, team === 'bull' ? 0xffe08a : 0xff8a95, god ? 11 : 6, god ? 40 : 26, god ? 0.85 : 0.5);
+		this.flareLight(x, groundY(x, z) + 2.5, z, team === 'bull' ? 0xffe08a : 0xff8a95, 8, 32, 0.65);
 		let hits = 0;
-		const maxHits = god ? 8 : 4, r2 = (god ? 9 : 6) ** 2, dmg = god ? 700 : 300;
+		const maxHits = 6, r2 = 7.5 ** 2, dmg = 460;
 		for (const e of this.units) {
 			if (e.team === team || e.dying > 0) continue;
 			const dx = e.x - x, dz = e.z - z;
@@ -1639,7 +1597,7 @@ export class Battle {
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
 			const priceBias = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 30, -1, 1) * FRONT_MAX * 0.35;
-			// NO ETERNAL STALEMATES: past five minutes the gods grow impatient — the
+			// NO ETERNAL STALEMATES: past five minutes the war gives no quarter — the
 			// stronger host snowballs harder and harder until a gate finally falls
 			this.sudden = THREE.MathUtils.clamp((this.warClock - 300) / 240, 0, 1);
 			if (this.sudden > 0 && !this.suddenAnnounced) {
@@ -1912,7 +1870,7 @@ export class Battle {
 
 	private isDueling(u: Unit): boolean { return u === this.duelA || u === this.duelB; }
 
-	// the pumping side fights with the gods' favor — its blades bite harder
+	// the pumping side fights with the market's favor — its blades bite harder
 	private teamMul(team: Team): number {
 		const tilt = THREE.MathUtils.clamp((this.momentum - this.momentumAnchor) / 50, -0.5, 0.5);
 		return team === 'bull' ? 1 + tilt * 0.5 : 1 - tilt * 0.5;
@@ -2001,10 +1959,6 @@ export class Battle {
 				else hs = 'idle';
 				const sink = u.dying > 0 && u.dying < 1 ? (1 - u.dying) * 0.9 : 0;
 				this.heroes.pose(u.hero, u.x, gy - sink, u.z, u.face, u.scale * UNIT_SCALE * 1.45, hs);
-				// a lich's strike is a spellcast — arc a crackling bolt into its victim
-				if (u.tier === 'GOD' && u.strike > 0.29 && u.target && u.target.dying <= 0) {
-					this.magicBolt(u.x, gy + 3.4, u.z, u.target.x, groundY(u.target.x, u.target.z) + 1.2, u.target.z, u.team);
-				}
 				continue;
 			}
 
@@ -2136,11 +2090,11 @@ export class Battle {
 			if (held && now < this.featuredUntil) return held;
 			this.featuredWallet = null;
 		}
-		// choose the best on-field legend: gods first, then closest to the front
+		// choose the best on-field legend: animated champions first, then closest to the front
 		let best: Unit | null = null, bs = -Infinity;
 		for (const u of this.units) {
 			if (!u.legend || u.dying > 0) continue;
-			const score = (u.tier === 'GOD' ? 100 : 0) + (u.hero >= 0 ? 40 : 0) - Math.abs(u.x - this.frontX) * 0.5;
+			const score = (u.hero >= 0 ? 60 : 0) - Math.abs(u.x - this.frontX) * 0.5;
 			if (score > bs) { bs = score; best = u; }
 		}
 		if (best) { this.featuredWallet = best.wallet || `#${best.idx}`; this.featuredUntil = now + 6000; }
@@ -2167,7 +2121,7 @@ export class Battle {
 			this.panZ += (tz - this.panZ) * Math.min(1, dt * 0.3);
 		}
 		const target = this._camTarget.set(this.panX, 1, this.panZ);
-		// hero-moment punch: a god's arrival pulls the camera in for a beat
+		// hero-moment punch: a champion's arrival pulls the camera in for a beat
 		this.zoomPunch = Math.max(0, this.zoomPunch - dt * 0.9);
 		const punch = 1 - Math.sin(Math.min(1, this.zoomPunch) * Math.PI) * 0.14;
 		let radius = 60 * this.camZoom * punch;
@@ -2296,7 +2250,7 @@ export class Battle {
 	}
 }
 
-function rankIdx(t: string): number { return ['GARRISON', 'SOLDIER', 'ELITE', 'CHAMPION', 'TITAN', 'GOD'].indexOf(t); }
+function rankIdx(t: string): number { return ['GARRISON', 'SOLDIER', 'ELITE', 'CHAMPION', 'TITAN'].indexOf(t); }
 
 function fmtUsdShort(n: number): string {
 	if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
