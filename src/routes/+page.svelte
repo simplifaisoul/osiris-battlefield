@@ -45,6 +45,13 @@
 	let clock = $state('');
 	let buyUsd = $state(0), sellUsd = $state(0);
 
+	// all-time record: the war remembers across sessions (localStorage)
+	let allTime = $state<{ bull: number; bear: number; whaleUsd: number }>({ bull: 0, bear: 0, whaleUsd: 0 });
+	function loadAllTime() {
+		try { const s = localStorage.getItem('osiris_alltime'); if (s) allTime = { bull: 0, bear: 0, whaleUsd: 0, ...JSON.parse(s) }; } catch {}
+	}
+	function saveAllTime() { try { localStorage.setItem('osiris_alltime', JSON.stringify(allTime)); } catch {} }
+
 	// the big number counts up/down instead of snapping — the market breathes.
 	// first reading snaps instantly so the ticker never shows $0.
 	const mcapTween = new Tween(0, { duration: 900, easing: cubicOut });
@@ -139,6 +146,7 @@
 				seen.add(t.tx);
 				const pct = pctOf(t.amount);
 				battle?.spawn({ wallet: t.wallet, kind: t.kind, usd: t.usd, pct, quiet: seed });
+				if (!seed && t.usd > allTime.whaleUsd) { allTime.whaleUsd = t.usd; saveAllTime(); }
 				if (!seed) {
 					const whale = pct >= 0.25, large = t.usd >= 300;
 					const price = token?.priceUsd ? fmtPrice(token.priceUsd) : '';
@@ -185,6 +193,7 @@
 
 	onMount(() => {
 		let alive = true;
+		loadAllTime();
 		if (new URLSearchParams(location.search).has('nointro')) { entered = true; muted = true; }
 		(async () => {
 			const { Battle } = await import('$lib/battle/engine');
@@ -222,6 +231,9 @@
 			battle.onCampaign = (r) => {
 				doFlash();
 				audio?.victory(r.winner === 'bull'); audio?.boom();
+				// the war remembers who has stormed the most bases across every session
+				if (r.winner === 'bull') allTime.bull++; else allTime.bear++;
+				saveAllTime();
 				campaignBanner = { winner: r.winner, campaign: r.campaign, mcap: token ? fmtUsd(token.marketCap) : '' };
 				clearTimeout(campaignTimer); campaignTimer = setTimeout(() => (campaignBanner = null), 3800);
 				pushFeed(`${r.winner === 'bull' ? 'BULLS' : 'BEARS'} STORM THE BASE — CAMPAIGN ${r.campaign} FALLS`, r.winner === 'bull' ? 'buy' : 'sell', '', true, undefined, '⚑');
@@ -400,6 +412,13 @@
 			<span class="dim">· TOP WHALE</span> <span class="gold">{fmtUsd(stats.biggestWhaleUsd)}</span>
 		{/if}
 	</div>
+	{#if allTime.bull + allTime.bear > 0}
+		<div class="ledger-alltime mono">
+			<span class="dim">ALL-TIME</span>
+			<span class="green">{allTime.bull}W</span><span class="dim">·</span><span class="red">{allTime.bear}W</span>
+			{#if allTime.whaleUsd > 0}<span class="dim">· RECORD</span> <span class="gold">{fmtUsd(allTime.whaleUsd)}</span>{/if}
+		</div>
+	{/if}
 </div>
 
 <!-- ORDER BOOK DEPTH (bottom-left) -->
@@ -622,6 +641,7 @@
 	.lg-bar span.red { background: rgba(255,77,94,0.6); }
 	.ledger-k { font-weight: 700; color: #fff; min-width: 16px; text-align: right; }
 	.ledger-foot { font-size: 9px; letter-spacing: 0.06em; margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); display: flex; gap: 5px; flex-wrap: wrap; }
+	.ledger-alltime { font-size: 9px; letter-spacing: 0.06em; margin-top: 4px; display: flex; gap: 5px; flex-wrap: wrap; align-items: baseline; }
 
 	/* ── ORDER BOOK ────────────────────────────────────── */
 	.orderbook { position: fixed; left: 22px; bottom: 132px; z-index: 10; width: 260px; padding: 12px 14px; }

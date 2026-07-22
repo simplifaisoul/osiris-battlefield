@@ -519,10 +519,15 @@ export class Battle {
 	private lastGarrison = { bulls: 60, bears: 60 };
 
 	private camYaw = 0.06; private camPitch = 0.46; private camZoom = 0.85; private zoomPunch = 0;
+	// cinematic "featured combatant": hold on one legend for a beat so the camera
+	// doesn't twitch between heroes; prefer gods, then whoever has fought longest
+	private featuredWallet: string | null = null; private featuredUntil = 0;
 	private panX = 0; private panZ = 0; private keys = new Set<string>();
 	private manualUntil = 0; private dragging = false; private lastPtr = { x: 0, y: 0 };
 
 	private sparks!: THREE.Points; private sparkPos!: Float32Array; private sparkVel!: Float32Array; private sparkLife!: Float32Array; private sparkColor!: Float32Array; private sparkHead = 0; private SPARK_N = 1500;
+	private FXLIGHT_N = 5; private fxLights: THREE.PointLight[] = [];
+	private fxLightLife = new Float32Array(5); private fxLightMax = new Float32Array(5); private fxLightPeak = new Float32Array(5); private fxLightHead = 0;
 	private souls!: THREE.Points; private soulPos!: Float32Array; private soulVel!: Float32Array; private soulLife!: Float32Array; private soulColor!: Float32Array; private soulHead = 0; private SOUL_N = 400;
 
 	private auras: THREE.Group[] = [];
@@ -633,6 +638,35 @@ export class Battle {
 		const rim = new THREE.DirectionalLight(0xff5a4a, 1.1);
 		rim.position.set(38, 30, -46);
 		this.scene.add(rim);
+
+		// dynamic combat lights: a fixed pool, all added now at intensity 0 so
+		// brightening them later never re-permutes the material shaders (the whole
+		// point — the render pipeline must never hitch or blow out). Strikes, beams,
+		// and lich casts flare these so the night actually reacts to the fighting.
+		for (let i = 0; i < this.FXLIGHT_N; i++) {
+			const l = new THREE.PointLight(0xffffff, 0, 46, 2);
+			l.position.set(0, -999, 0);
+			this.scene.add(l);
+			this.fxLights.push(l);
+		}
+	}
+
+	private flareLight(x: number, y: number, z: number, hex: number, peak: number, dist: number, life: number) {
+		const i = this.fxLightHead; this.fxLightHead = (this.fxLightHead + 1) % this.FXLIGHT_N;
+		const l = this.fxLights[i];
+		l.color.setHex(hex); l.position.set(x, y, z); l.distance = dist; l.intensity = peak;
+		this.fxLightPeak[i] = peak; this.fxLightLife[i] = life; this.fxLightMax[i] = life;
+	}
+
+	private updateLights(dt: number) {
+		for (let i = 0; i < this.FXLIGHT_N; i++) {
+			if (this.fxLightLife[i] <= 0) continue;
+			this.fxLightLife[i] -= dt;
+			const k = Math.max(0, this.fxLightLife[i] / this.fxLightMax[i]);
+			// ease out with a faint flicker so firelight feels alive, then snap dark
+			this.fxLights[i].intensity = k * k * this.fxLightPeak[i] * (0.85 + Math.sin(this.time * 40 + i) * 0.15);
+			if (this.fxLightLife[i] <= 0) { this.fxLights[i].intensity = 0; this.fxLights[i].position.y = -999; }
+		}
 	}
 
 	private buildGround() {
@@ -1335,6 +1369,10 @@ export class Battle {
 			this.sparkColor[i * 3] = col.r * 2.2; this.sparkColor[i * 3 + 1] = col.g * 2.2; this.sparkColor[i * 3 + 2] = col.b * 2.2;
 		}
 		this.spawnBurst(tx, ty, tz, col, 7);
+		// the spell flares light at the staff and where it lands
+		const hex = team === 'bull' ? 0x7dffb0 : 0xff7a86;
+		this.flareLight(sx, sy, sz, hex, 4.5, 20, 0.28);
+		this.flareLight(tx, ty + 0.6, tz, hex, 4, 18, 0.3);
 	}
 
 	private spawnSoul(x: number, y: number, z: number, color: THREE.Color) {
@@ -1389,6 +1427,8 @@ export class Battle {
 			const mesh = new THREE.Mesh(geo, mat);
 			mesh.position.set(tx, ty + 45, tz);
 			this.scene.add(mesh);
+			// the pillar of Ra lights the ground beneath it for its whole burn
+			this.flareLight(tx, ty + 3, tz, col, 13, 48, 1.05);
 			this.strikesFx.push({ mode: 'beam', t: 0, dur: 1.1, sx: tx, sy: ty + 45, sz: tz, tx, ty, tz, team, god, mesh, hit: false });
 		} else {
 			const geo = new THREE.OctahedronGeometry(0.9, 0); geo.scale(1, 2.6, 1);
@@ -1447,6 +1487,8 @@ export class Battle {
 		this.spawnSmoke(x, groundY(x, z) + 1.2, z, god ? 16 : 9);
 		this.addDecal(x, z, god ? 3 : 1.8);
 		this.shake = Math.min(2, this.shake + (god ? 1.5 : 0.8));
+		// the explosion throws real light across the field
+		this.flareLight(x, groundY(x, z) + 2.5, z, team === 'bull' ? 0xffe08a : 0xff8a95, god ? 11 : 6, god ? 40 : 26, god ? 0.85 : 0.5);
 		let hits = 0;
 		const maxHits = god ? 8 : 4, r2 = (god ? 9 : 6) ** 2, dmg = god ? 700 : 300;
 		for (const e of this.units) {
@@ -1543,6 +1585,7 @@ export class Battle {
 		this.heroes.update(simDt);
 		this.updateArrows(simDt);
 		this.updateStrikes(simDt);
+		this.updateLights(simDt);
 		this.updateParticles(simDt);
 		this.updateEmbers(simDt);
 		this.updateDecals(simDt);
@@ -2085,6 +2128,25 @@ export class Battle {
 		for (const key in this.armies) { const a = this.armies[key]; a.mesh.count = a.top + 1; a.act.count = a.top + 1; }
 	}
 
+	// pick a legend for the camera to feature, holding the pick for ~6s
+	private featured(): Unit | null {
+		const now = performance.now();
+		if (this.featuredWallet) {
+			const held = this.units.find((u) => u.wallet === this.featuredWallet && u.dying <= 0 && u.legend);
+			if (held && now < this.featuredUntil) return held;
+			this.featuredWallet = null;
+		}
+		// choose the best on-field legend: gods first, then closest to the front
+		let best: Unit | null = null, bs = -Infinity;
+		for (const u of this.units) {
+			if (!u.legend || u.dying > 0) continue;
+			const score = (u.tier === 'GOD' ? 100 : 0) + (u.hero >= 0 ? 40 : 0) - Math.abs(u.x - this.frontX) * 0.5;
+			if (score > bs) { bs = score; best = u; }
+		}
+		if (best) { this.featuredWallet = best.wallet || `#${best.idx}`; this.featuredUntil = now + 6000; }
+		return best;
+	}
+
 	private render(dt: number) {
 		if (this.keys.size) {
 			const spd = 46 * dt * this.camZoom, sy = Math.sin(this.camYaw), cy = Math.cos(this.camYaw);
@@ -2095,9 +2157,14 @@ export class Battle {
 			this.panX = THREE.MathUtils.clamp(this.panX, -88, 88); this.panZ = THREE.MathUtils.clamp(this.panZ, -66, 66);
 		}
 
-		// war camera: unless the user is driving, drift to keep the front line on screen
+		// war camera: unless the user is driving, drift to keep the front on screen and,
+		// when a legend is fighting, lean toward it so hero moments get framed
 		if (performance.now() > this.manualUntil && !this.focus && !this.keys.size) {
-			this.panX += (this.frontX * 0.72 - this.panX) * Math.min(1, dt * 0.35);
+			const feat = this.featured();
+			let tx = this.frontX * 0.72, tz = 0;
+			if (feat) { tx = tx * 0.4 + feat.x * 0.6; tz = feat.z * 0.55; }
+			this.panX += (tx - this.panX) * Math.min(1, dt * 0.35);
+			this.panZ += (tz - this.panZ) * Math.min(1, dt * 0.3);
 		}
 		const target = this._camTarget.set(this.panX, 1, this.panZ);
 		// hero-moment punch: a god's arrival pulls the camera in for a beat
