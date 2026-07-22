@@ -6,6 +6,7 @@ import {
 } from 'postprocessing';
 import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
+import { HeroPool, type HeroState } from './heroes';
 
 export type Team = 'bull' | 'bear';
 export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian' | 'chariot';
@@ -48,6 +49,8 @@ type Unit = {
 	lane: number; slot: number; row: number; frontJitter: number; flank: boolean;
 	// articulation: wheel/limb angle accumulator + last position (for distance-driven spin)
 	spin: number; px: number; pz: number;
+	// index into the animated hero pool (−1 = rendered by the instanced crowd system)
+	hero: number;
 };
 
 // the war breathes like a real field battle:
@@ -527,6 +530,7 @@ export class Battle {
 	private flags: THREE.Mesh[] = [];
 	private dummy = new THREE.Object3D(); private tmpColor = new THREE.Color();
 	private mA = new THREE.Matrix4(); private mB = new THREE.Matrix4();
+	private heroes = new HeroPool();
 	private _camTarget = new THREE.Vector3(); private _camPos = new THREE.Vector3();
 	private q = new THREE.Quaternion(); private upV = new THREE.Vector3(0, 1, 0); private vTmp = new THREE.Vector3();
 
@@ -573,6 +577,10 @@ export class Battle {
 		this.buildStandards();
 		this.buildDecals();
 		this.buildAuras();
+
+		// animated hero characters stream in async; until then (or on failure)
+		// legends render through the instanced crowd system like everyone else
+		this.heroes.load(this.scene).catch(() => {});
 
 		this.on(window, 'resize', () => this.resize());
 		// GPU resets (driver TDR, tab backgrounding) must not leave a dead canvas
@@ -1267,10 +1275,12 @@ export class Battle {
 			row: cls === 'guardian' ? 0 : cls === 'spear' ? (Math.random() < 0.55 ? 0 : 1) : 2 + ((Math.random() * 2) | 0),
 			frontJitter: -3 + Math.random() * 14, // ranged skirmish depth
 			flank: !st.ranged && (cls === 'duelist' ? Math.random() < 0.3 : Math.random() < 0.08),
-			spin: Math.random() * Math.PI * 2, px: 0, pz: 0
+			spin: Math.random() * Math.PI * 2, px: 0, pz: 0, hero: -1
 		});
 		const u = this.units[this.units.length - 1];
 		u.px = u.x; u.pz = u.z;
+		// legends walk the field as fully animated characters when the pool has room
+		if (legend) u.hero = this.heroes.claim(tier.name === 'GOD' ? 'mage' : 'warrior', team);
 		return u;
 	}
 
@@ -1285,6 +1295,7 @@ export class Battle {
 			const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
 			for (const mat of mats) { (mat as THREE.MeshBasicMaterial).map?.dispose(); mat.dispose(); }
 		});
+		this.heroes.dispose();
 		this.composer.dispose(); this.renderer.dispose();
 	}
 	private resize() {
@@ -1503,6 +1514,7 @@ export class Battle {
 		const simDt = dt * this.timeScale;
 
 		this.step(simDt);
+		this.heroes.update(simDt);
 		this.updateArrows(simDt);
 		this.updateStrikes(simDt);
 		this.updateParticles(simDt);
@@ -1864,7 +1876,7 @@ export class Battle {
 
 	private resetCampaign() {
 		this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
-		for (const u of this.units) { const a = this.armies[`${u.team}:${u.cls}`]; a.mesh.setMatrixAt(u.idx, this.dummy.matrix); a.act.setMatrixAt(u.idx, this.dummy.matrix); }
+		for (const u of this.units) { const a = this.armies[`${u.team}:${u.cls}`]; a.mesh.setMatrixAt(u.idx, this.dummy.matrix); a.act.setMatrixAt(u.idx, this.dummy.matrix); if (u.hero >= 0) this.heroes.release(u.hero); }
 		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.act.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
 		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
@@ -1903,6 +1915,26 @@ export class Battle {
 			if (u.idx > army.top) army.top = u.idx;
 			const mesh = army.mesh;
 			const d = this.dummy, gy = groundY(u.x, u.z);
+
+			// legends with a live hero body render as animated characters instead
+			if (u.hero >= 0) {
+				d.scale.setScalar(0); d.updateMatrix();
+				mesh.setMatrixAt(u.idx, d.matrix); army.act.setMatrixAt(u.idx, d.matrix);
+				dirty.add(mesh); dirty.add(army.act);
+				const hDist = Math.hypot(u.x - u.px, u.z - u.pz);
+				u.px = u.x; u.pz = u.z;
+				let hs: HeroState;
+				if (u.dying > 0) hs = 'death';
+				else if (this.phase === 'victory' && this.winner === u.team) hs = 'cheer';
+				else if (u.age < 1.6) hs = 'spawn';
+				else if (u.strike > 0) hs = 'attack';
+				else if (hDist > 0.045) hs = this.battlePhase === 'charge' ? 'run' : 'walk';
+				else hs = 'idle';
+				const sink = u.dying > 0 && u.dying < 1 ? (1 - u.dying) * 0.9 : 0;
+				this.heroes.pose(u.hero, u.x, gy - sink, u.z, u.face, u.scale * UNIT_SCALE * 1.45, hs);
+				continue;
+			}
+
 			// spawn pop-in (Clash-style overshoot)
 			const pop = u.age < 0.45 ? easeOutBack(Math.min(1, u.age / 0.45)) : 1;
 			const s = u.scale * UNIT_SCALE * Math.max(0.01, pop);
@@ -2014,7 +2046,9 @@ export class Battle {
 			const army = this.armies[`${u.team}:${u.cls}`];
 			this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
 			army.mesh.setMatrixAt(u.idx, this.dummy.matrix); army.act.setMatrixAt(u.idx, this.dummy.matrix);
-			dirty.add(army.mesh); dirty.add(army.act); army.free.push(u.idx); this.units.splice(i, 1);
+			dirty.add(army.mesh); dirty.add(army.act); army.free.push(u.idx);
+			if (u.hero >= 0) this.heroes.release(u.hero);
+			this.units.splice(i, 1);
 		}
 		for (const m of dirty) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
 		// only draw the occupied slice of each army buffer — empty ranks cost nothing
