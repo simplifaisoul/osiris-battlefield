@@ -6,7 +6,7 @@ import {
 } from 'postprocessing';
 import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
-import { HeroPool, type HeroState } from './heroes';
+import { CharacterPool, type CharState, type Role } from './characters';
 
 export type Team = 'bull' | 'bear';
 export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian' | 'chariot';
@@ -49,8 +49,8 @@ type Unit = {
 	lane: number; slot: number; row: number; frontJitter: number; flank: boolean;
 	// articulation: wheel/limb angle accumulator + last position (for distance-driven spin)
 	spin: number; px: number; pz: number;
-	// index into the animated hero pool (−1 = rendered by the instanced crowd system)
-	hero: number;
+	// index into the animated character pool (−1 until claimed / models still loading)
+	char: number;
 };
 
 // the war breathes like a real field battle:
@@ -477,8 +477,8 @@ export class Battle {
 	private camera: THREE.PerspectiveCamera;
 	private composer!: EffectComposer;
 
-	private armies: Record<string, { mesh: THREE.InstancedMesh; act: THREE.InstancedMesh; pivot: THREE.Vector3; spin: boolean; free: number[]; top: number }> = {};
 	private units: Unit[] = [];
+	private nextId = 0;
 	private frontX = 0;
 	private terrainH: (x: number, z: number) => number = () => 0;
 
@@ -534,8 +534,10 @@ export class Battle {
 	private capitalBull!: THREE.Group; private capitalBear!: THREE.Group; private frontLine!: THREE.Mesh;
 	private flags: THREE.Mesh[] = [];
 	private dummy = new THREE.Object3D(); private tmpColor = new THREE.Color();
-	private mA = new THREE.Matrix4(); private mB = new THREE.Matrix4();
-	private heroes = new HeroPool();
+	private chars = new CharacterPool();
+	// units over this many alive per side stop mustering reinforcements; real trades
+	// always deploy. Keeps the field a readable clash of pro characters, not a mob.
+	private SIDE_CAP = 60;
 	private _camTarget = new THREE.Vector3(); private _camPos = new THREE.Vector3();
 	private q = new THREE.Quaternion(); private upV = new THREE.Vector3(0, 1, 0); private vTmp = new THREE.Vector3();
 
@@ -573,7 +575,6 @@ export class Battle {
 		this.buildGroundText();
 		this.buildMcapTicks();
 		this.buildMcapSign();
-		this.buildArmies();
 		this.buildArrows();
 		this.buildSparks();
 		this.buildSouls();
@@ -583,9 +584,9 @@ export class Battle {
 		this.buildDecals();
 		this.buildAuras();
 
-		// animated hero characters stream in async; until then (or on failure)
-		// legends render through the instanced crowd system like everyone else
-		this.heroes.load(this.scene).catch(() => {});
+		// the whole army streams in as real animated characters; units spawned before
+		// the models arrive simply pop in once ready (claim() no-ops until then)
+		this.chars.load(this.scene).catch(() => {});
 
 		this.on(window, 'resize', () => this.resize());
 		// GPU resets (driver TDR, tab backgrounding) must not leave a dead canvas
@@ -1050,32 +1051,6 @@ export class Battle {
 		this.priceTex.needsUpdate = true;
 	}
 
-	private buildArmies() {
-		const builders: Record<Cls, (p: Palette, bear: boolean) => UnitGeo> = { spear: buildSpearman, duelist: buildDuelist, archer: buildArcher, guardian: buildGuardian, chariot: buildChariot };
-		for (const team of ['bull', 'bear'] as Team[]) {
-			for (const cls of CLASSES) {
-				const geo = builders[cls](PAL[team], team === 'bear');
-				this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
-				const mk = (g: THREE.BufferGeometry, shadow: boolean) => {
-					const m = new THREE.InstancedMesh(g, toonMaterial(), MAX);
-					// instanced culling tests the GEOMETRY's sphere at the origin, not the
-					// instances — armies span the whole board, so culling must be off or
-					// every unit vanishes the moment mid-field leaves the frustum
-					m.frustumCulled = false;
-					m.castShadow = shadow; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.count = MAX;
-					for (let i = 0; i < MAX; i++) { m.setMatrixAt(i, this.dummy.matrix); const v = 0.92 + Math.random() * 0.16; m.setColorAt(i, this.tmpColor.setScalar(v)); }
-					m.instanceMatrix.needsUpdate = true;
-					this.scene.add(m);
-					return m;
-				};
-				const mesh = mk(geo.body, true);
-				const act = mk(geo.act, false); // action parts skip the shadow pass — crowds stay cheap
-				const free: number[] = []; for (let i = 0; i < MAX; i++) free.push(MAX - 1 - i);
-				this.armies[`${team}:${cls}`] = { mesh, act, pivot: new THREE.Vector3(...geo.pivot), spin: !!geo.spin, free, top: -1 };
-			}
-		}
-	}
-
 	private buildArrows() {
 		this.arrowMesh = new THREE.InstancedMesh(buildArrowGeo(), new THREE.MeshBasicMaterial({ vertexColors: true }), this.PROJ);
 		this.arrowMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.arrowMesh.count = this.PROJ; this.arrowMesh.frustumCulled = false;
@@ -1243,8 +1218,8 @@ export class Battle {
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
-		for (let i = 0; i < bulls; i++) this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, true);
-		for (let i = 0; i < bears; i++) this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, true);
+		for (let i = 0; i < bulls; i++) this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, true, true);
+		for (let i = 0; i < bears; i++) this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, true, true);
 	}
 
 	spawn(input: SpawnInput) {
@@ -1291,9 +1266,13 @@ export class Battle {
 		}
 	}
 
-	private addUnit(team: Team, cls: Cls, tier: Tier, wallet: string, legend: boolean, atFront: boolean): Unit | null {
-		const army = this.armies[`${team}:${cls}`]; if (!army || !army.free.length) return null;
-		const idx = army.free.pop()!;
+	private aliveCount(team: Team): number {
+		let n = 0; for (const u of this.units) if (u.team === team && u.dying <= 0) n++; return n;
+	}
+
+	private addUnit(team: Team, cls: Cls, tier: Tier, wallet: string, legend: boolean, atFront: boolean, gated = false): Unit | null {
+		// reinforcements/garrison stop at the side cap; real trades always deploy
+		if (gated && this.aliveCount(team) >= this.SIDE_CAP) return null;
 		const sign = team === 'bull' ? -1 : 1;
 		const st = CLASS_STATS[cls];
 		this.units.push({
@@ -1305,10 +1284,10 @@ export class Battle {
 			// rear spawns muster on the road and march to the front in columns
 			z: atFront ? (Math.random() - 0.5) * ARENA_Z * 2 : ROAD_Z + (Math.random() - 0.5) * 7,
 			rank: atFront ? Math.random() * 3 : Math.random() * 6,
-			bob: Math.random() * Math.PI * 2, age: 0, cd: Math.random() * 1.5, kills: 0, idx, dying: 0,
+			bob: Math.random() * Math.PI * 2, age: 0, cd: Math.random() * 1.5, kills: 0, idx: this.nextId++, dying: 0,
 			tracked: !!this.trackWallet && wallet === this.trackWallet, legend, melee: false,
 			target: null, retarget: Math.random() * 0.4, atkCd: Math.random() * 0.8, strike: 0,
-			face: sign < 0 ? 0 : Math.PI, // rotY that points local +x (weapon/barrel) at the enemy side
+			face: sign < 0 ? 0 : Math.PI, // rotY that points local +x (weapon) at the enemy side
 			tint: 0.92 + Math.random() * 0.16, struck: 0, swingSide: Math.random() < 0.5 ? 1 : -1,
 			lane: (Math.random() - 0.5) * ARENA_Z * 2,
 			// formation post: quantized file across the field, class decides the rank depth
@@ -1316,13 +1295,12 @@ export class Battle {
 			row: cls === 'guardian' ? 0 : cls === 'spear' ? (Math.random() < 0.55 ? 0 : 1) : 2 + ((Math.random() * 2) | 0),
 			frontJitter: -3 + Math.random() * 14, // ranged skirmish depth
 			flank: !st.ranged && (cls === 'duelist' ? Math.random() < 0.3 : Math.random() < 0.08),
-			spin: Math.random() * Math.PI * 2, px: 0, pz: 0, hero: -1
+			spin: Math.random() * Math.PI * 2, px: 0, pz: 0, char: -1
 		});
 		const u = this.units[this.units.length - 1];
 		u.px = u.x; u.pz = u.z;
-		// champions walk the field as fully animated characters when the pool has room:
-		// deathless warriors or blade-rogues risen for the war
-		if (legend) u.hero = this.heroes.claim(Math.random() < 0.5 ? 'warrior' : 'rogue', team);
+		// every fighter takes the field as a real animated character
+		u.char = this.chars.claim(team, cls as Role);
 		return u;
 	}
 
@@ -1337,7 +1315,7 @@ export class Battle {
 			const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
 			for (const mat of mats) { (mat as THREE.MeshBasicMaterial).map?.dispose(); mat.dispose(); }
 		});
-		this.heroes.dispose();
+		this.chars.dispose();
 		this.composer.dispose(); this.renderer.dispose();
 	}
 	private resize() {
@@ -1540,7 +1518,7 @@ export class Battle {
 		const simDt = dt * this.timeScale;
 
 		this.step(simDt);
-		this.heroes.update(simDt);
+		this.chars.update(simDt);
 		this.updateArrows(simDt);
 		this.updateStrikes(simDt);
 		this.updateLights(simDt);
@@ -1624,8 +1602,8 @@ export class Battle {
 			this.accS += Math.max(this.reinS, FLOOR) * (1 - tilt) * dt;
 			if (bullCount < 24) this.accB += dt * (24 - bullCount) * 0.09;
 			if (bearCount < 24) this.accS += dt * (24 - bearCount) * 0.09;
-			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
-			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false); }
+			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false, true); }
+			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false, true); }
 		}
 
 		// live rosters for target acquisition
@@ -1816,7 +1794,7 @@ export class Battle {
 			u.x = THREE.MathUtils.clamp(u.x, -CAP + 3, CAP - 3);
 		}
 
-		this.updateInstances();
+		this.updateUnits();
 
 		this.frontLine.position.x = this.frontX; this.frontLine.position.y = hillY(this.frontX) + 0.12;
 		(this.frontLine.material as THREE.MeshBasicMaterial).opacity = 0.2 + Math.sin(this.time * 5) * 0.07;
@@ -1902,9 +1880,7 @@ export class Battle {
 	}
 
 	private resetCampaign() {
-		this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
-		for (const u of this.units) { const a = this.armies[`${u.team}:${u.cls}`]; a.mesh.setMatrixAt(u.idx, this.dummy.matrix); a.act.setMatrixAt(u.idx, this.dummy.matrix); if (u.hero >= 0) this.heroes.release(u.hero); }
-		for (const key in this.armies) { const a = this.armies[key]; a.mesh.instanceMatrix.needsUpdate = true; a.act.instanceMatrix.needsUpdate = true; a.free = []; for (let i = 0; i < MAX; i++) a.free.push(MAX - 1 - i); }
+		for (const u of this.units) if (u.char >= 0) this.chars.release(u.char);
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
 		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
 		this.sudden = 0; this.suddenAnnounced = false;
@@ -1916,7 +1892,7 @@ export class Battle {
 
 	private kill(u: Unit, killers: Unit[]) {
 		if (u.dying > 0) return; // already down — never double-count a casualty
-		u.dying = 8; // fall, lie as a casualty on the field, then fade
+		u.dying = 3; // play the death animation, sink, then retire the character
 		this.spawnBurst(u.x, hillY(u.x) + 1.2, u.z, u.team === 'bull' ? GOLD : CRIMSON, u.legend ? 40 : 9);
 		this.spawnSoul(u.x, hillY(u.x) + 1.6, u.z, u.team === 'bull' ? GOLD : CRIMSON);
 		this.addDecal(u.x, u.z, u.scale);
@@ -1932,154 +1908,33 @@ export class Battle {
 		this.onEvent?.({ type: 'kill', team: u.team, tier: u.tier, cls: u.cls, wallet: u.wallet, usd: 0, pct: 0 });
 	}
 
-	private updateInstances() {
-		const dirty = new Set<THREE.InstancedMesh>();
-		for (const key in this.armies) this.armies[key].top = -1;
+	private updateUnits() {
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i];
-			if (u.dying <= 0 && u.hp <= 0) continue;
-			const army = this.armies[`${u.team}:${u.cls}`];
-			if (u.idx > army.top) army.top = u.idx;
-			const mesh = army.mesh;
-			const d = this.dummy, gy = groundY(u.x, u.z);
-
-			// legends with a live hero body render as animated characters instead
-			if (u.hero >= 0) {
-				d.scale.setScalar(0); d.updateMatrix();
-				mesh.setMatrixAt(u.idx, d.matrix); army.act.setMatrixAt(u.idx, d.matrix);
-				dirty.add(mesh); dirty.add(army.act);
-				const hDist = Math.hypot(u.x - u.px, u.z - u.pz);
-				u.px = u.x; u.pz = u.z;
-				let hs: HeroState;
-				if (u.dying > 0) hs = 'death';
-				else if (this.phase === 'victory' && this.winner === u.team) hs = 'cheer';
-				else if (u.age < 1.6) hs = 'spawn';
-				else if (u.strike > 0) hs = 'attack';
-				else if (hDist > 0.045) hs = this.battlePhase === 'charge' ? 'run' : 'walk';
-				else hs = 'idle';
-				const sink = u.dying > 0 && u.dying < 1 ? (1 - u.dying) * 0.9 : 0;
-				this.heroes.pose(u.hero, u.x, gy - sink, u.z, u.face, u.scale * UNIT_SCALE * 1.45, hs);
-				continue;
-			}
-
-			// spawn pop-in (Clash-style overshoot)
-			const pop = u.age < 0.45 ? easeOutBack(Math.min(1, u.age / 0.45)) : 1;
-			const s = u.scale * UNIT_SCALE * Math.max(0.01, pop);
-			if (u.dying > 0) {
-				// fall over (0.45s) → lie as a casualty → sink away in the last second
-				const elapsed = 8 - u.dying;
-				const fall = Math.min(1, elapsed / 0.45);
-				const fade = u.dying < 1 ? u.dying : 1;
-				// fallen warriors topple sideways; guardians crumble slowly, still upright
-				const flopAmt = u.cls === 'guardian' ? 0.5 : 0.94;
-				const flop = (u.idx % 2 === 0 ? 1 : -1) * fall * (Math.PI / 2) * flopAmt;
-				d.position.set(u.x, gy + (1 - fall) * 0.2 - (1 - fade) * 0.55, u.z);
-				d.scale.setScalar(s * (0.55 + fade * 0.45));
-				d.rotation.set(0, u.face, flop);
-			} else if (u.ranged) {
-				const hop = Math.abs(Math.sin(u.bob * 0.6)) * 0.06 * u.scale;
-				// draw-and-loose: lean back on strike, snap forward on release
-				const loose = u.strike > 0 ? Math.sin((0.3 - u.strike) / 0.3 * Math.PI) * 0.28 : 0;
-				d.position.set(u.x, gy + hop, u.z);
-				d.scale.setScalar(s);
-				d.rotation.set(-loose * 0.6, u.face, Math.sin(u.bob * 0.5) * 0.05);
-			} else if (u.strike > 0) {
-				// weapon strike: anticipation wind-up then chop into the target.
-				// chariots don't chop — the whole rig rams forward on flat wheels.
-				const t = 1 - u.strike / 0.32; // 0 → 1 over the swing
-				const chariot = u.cls === 'chariot';
-				// the arm carries the swing now — the body just leans into it
-			const swing = (t < 0.35 ? -t / 0.35 * 0.22 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'guardian' ? 0.4 : 0.28)) * (chariot ? 0.18 : 1);
-				const lungeF = t < 0.35 ? 0 : Math.sin((t - 0.35) / 0.65 * Math.PI) * (u.cls === 'duelist' ? 0.7 : chariot ? 0.9 : 0.4);
-				// duelists carve alternating diagonal arcs — left blade, then right
-				const roll = u.cls === 'duelist' ? Math.sin(t * Math.PI) * 0.5 * u.swingSide : 0;
-				const fx = Math.cos(u.face), fz = -Math.sin(u.face); // forward (local +x) from face angle
-				d.position.set(u.x + fx * lungeF, gy + Math.abs(Math.sin(u.bob * 2)) * 0.06 * u.scale, u.z + fz * lungeF);
-				d.scale.setScalar(s);
-				d.rotation.set(swing, u.face, roll);
-			} else if (u.melee) {
-				// guard stance — tense bounce facing the enemy
-				d.position.set(u.x, gy + Math.abs(Math.sin(u.bob * 2.4)) * 0.07 * u.scale, u.z);
-				d.scale.setScalar(s);
-				d.rotation.set(0.06, u.face, Math.sin(u.bob * 3) * 0.05);
-			} else {
-				// march in step — the cadence ripples down the file like a drilled phalanx
-				const bp = this.battlePhase;
-				const braced = u.cls === 'spear' && (bp === 'form' || bp === 'advance' || bp === 'regroup');
-				const gait = Math.sin(u.ranged ? u.bob : this.time * 8.5 + u.slot * 0.35 + u.row * 0.9);
-				if (u.cls === 'chariot') {
-					// wheels roll — no footstep bounce, just a low road-rumble sway
-					d.position.set(u.x, gy + Math.abs(gait) * 0.03, u.z);
-					d.scale.setScalar(s);
-					d.rotation.set(0.02, u.face, gait * 0.04);
-				} else if (braced) {
-					// shield wall: planted, leaning into the shield, barely swaying
-					d.position.set(u.x, gy + Math.abs(gait) * 0.05 * u.scale, u.z);
-					d.scale.setScalar(s);
-					d.rotation.set(0.16, u.face, gait * 0.03);
-				} else {
-					d.position.set(u.x, gy + Math.abs(gait) * 0.22 * u.scale, u.z);
-					d.scale.setScalar(s);
-					d.rotation.set(0.1, u.face, gait * 0.14);
-				}
-			}
-			d.updateMatrix(); mesh.setMatrixAt(u.idx, d.matrix); dirty.add(mesh);
-
-			// ── ARTICULATION: the act part (weapon arm / blade pair / bow / wheels)
-			// rotates about its pivot in unit-local space, composed onto the body matrix
-			let ang = 0;
-			if (army.spin) {
-				// wheels roll with distance travelled (spokes make it read)
-				const dist = Math.hypot(u.x - u.px, u.z - u.pz);
-				if (u.dying <= 0) u.spin += dist / 0.42;
-				ang = -u.spin;
-			} else if (u.dying > 0) {
-				ang = 0; // the limb freezes; the whole figure flops via the body matrix
-			} else if (u.strike > 0) {
-				const t = 1 - u.strike / 0.32;
-				const amp = u.cls === 'guardian' ? 1.7 : u.cls === 'duelist' ? 1.25 : u.cls === 'archer' ? 0 : 1.0;
-				if (u.cls === 'archer') {
-					// draw held back, snapping home on the loose
-					ang = (1 - t) * 0.5;
-				} else {
-					// wind the arm up and back, then sweep it down through the target
-					const w = Math.min(1, t / 0.35);
-					const sPh = t < 0.35 ? 0 : (t - 0.35) / 0.65;
-					ang = (1 - sPh) * 0.6 * w - Math.sin(sPh * Math.PI) * amp;
-					if (u.cls === 'duelist') ang *= u.swingSide >= 0 ? 1 : 0.75; // alternating blades
-				}
-			} else {
-				// at rest the arm breathes with the body's cadence
-				ang = Math.sin(u.bob * (u.cls === 'duelist' ? 1.6 : 1.1)) * 0.07;
-			}
-			const pv = army.pivot;
-			this.mA.makeRotationZ(ang);
-			const e = this.mA.elements; // bake T(pivot)·Rz·T(−pivot) into one matrix
-			e[12] = pv.x - (e[0] * pv.x + e[4] * pv.y);
-			e[13] = pv.y - (e[1] * pv.x + e[5] * pv.y);
-			this.mB.multiplyMatrices(d.matrix, this.mA);
-			army.act.setMatrixAt(u.idx, this.mB); dirty.add(army.act);
+			// claim a character the moment the models finish streaming in
+			if (u.char < 0) { u.char = this.chars.claim(u.team, u.cls as Role); if (u.char < 0) { u.px = u.x; u.pz = u.z; continue; } }
+			const gy = groundY(u.x, u.z);
+			const moved = Math.hypot(u.x - u.px, u.z - u.pz);
 			u.px = u.x; u.pz = u.z;
-
-			// colour: hit-flash > tracked glow > base tint
-			if (u.struck > 0) this.tmpColor.set(2.4, 2.2, 2.0);
-			else if (u.tracked) this.tmpColor.set(1.6, 1.5, 1.1);
-			else this.tmpColor.setScalar(u.tint);
-			mesh.setColorAt(u.idx, this.tmpColor);
-			army.act.setColorAt(u.idx, this.tmpColor);
+			// drive the character's animation state straight off the simulation
+			let st: CharState;
+			if (u.dying > 0) st = 'death';
+			else if (this.phase === 'victory' && this.winner === u.team) st = 'cheer';
+			else if (u.age < 1.0) st = 'spawn';
+			else if (u.strike > 0) st = 'attack';
+			else if (moved > 0.07) st = this.battlePhase === 'charge' ? 'run' : 'walk';
+			else st = 'idle';
+			// slain characters sink into the earth as the death clip finishes
+			const sink = u.dying > 0 && u.dying < 0.7 ? (1 - u.dying / 0.7) * 1.3 : 0;
+			const size = u.legend ? 1.32 : u.tier === 'CHAMPION' ? 1.14 : u.tier === 'ELITE' ? 1.06 : 1;
+			this.chars.pose(u.char, u.x, gy - sink, u.z, u.face, size, st);
 		}
+		// retire fully-fallen units and free their character slots
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i]; if (u.dying > 0 || u.hp > 0) continue;
-			const army = this.armies[`${u.team}:${u.cls}`];
-			this.dummy.scale.setScalar(0); this.dummy.updateMatrix();
-			army.mesh.setMatrixAt(u.idx, this.dummy.matrix); army.act.setMatrixAt(u.idx, this.dummy.matrix);
-			dirty.add(army.mesh); dirty.add(army.act); army.free.push(u.idx);
-			if (u.hero >= 0) this.heroes.release(u.hero);
+			if (u.char >= 0) this.chars.release(u.char);
 			this.units.splice(i, 1);
 		}
-		for (const m of dirty) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
-		// only draw the occupied slice of each army buffer — empty ranks cost nothing
-		for (const key in this.armies) { const a = this.armies[key]; a.mesh.count = a.top + 1; a.act.count = a.top + 1; }
 	}
 
 	// pick a legend for the camera to feature, holding the pick for ~6s
@@ -2094,7 +1949,7 @@ export class Battle {
 		let best: Unit | null = null, bs = -Infinity;
 		for (const u of this.units) {
 			if (!u.legend || u.dying > 0) continue;
-			const score = (u.hero >= 0 ? 60 : 0) - Math.abs(u.x - this.frontX) * 0.5;
+			const score = (u.char >= 0 ? 60 : 0) - Math.abs(u.x - this.frontX) * 0.5;
 			if (score > bs) { bs = score; best = u; }
 		}
 		if (best) { this.featuredWallet = best.wallet || `#${best.idx}`; this.featuredUntil = now + 6000; }
@@ -2235,7 +2090,7 @@ export class Battle {
 		for (const u of this.units) {
 			if (u.dying > 0) continue;
 			if (u.tracked) { const p = project(u.x, hillY(u.x) + u.scale * 2.3, u.z); tracked.push({ x: p.x, y: p.y, on: p.on, tier: u.tier, team: u.team, hp: Math.max(0, u.hp), maxHp: u.maxHp, kills: u.kills, wallet: u.wallet }); }
-			else if (u.legend) { const p = project(u.x, hillY(u.x) + u.scale * (u.hero >= 0 ? 3.3 : 2.3), u.z); titans.push({ x: p.x, y: p.y, on: p.on, label: u.tier, team: u.team, hp: Math.max(0, u.hp), maxHp: u.maxHp }); }
+			else if (u.legend) { const p = project(u.x, hillY(u.x) + u.scale * 3.3, u.z); titans.push({ x: p.x, y: p.y, on: p.on, label: u.tier, team: u.team, hp: Math.max(0, u.hp), maxHp: u.maxHp }); }
 		}
 		// floating casualty markers, rising as they fade
 		const now = performance.now();
