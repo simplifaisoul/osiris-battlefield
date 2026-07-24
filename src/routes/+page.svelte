@@ -243,6 +243,8 @@
 			const g = (n: number) => Math.max(70, Math.min(220, Math.round(n * 1.2)));
 			battle.spawnGarrison(g(token?.buys24h ?? 120), g(token?.sells24h ?? 120));
 			await loadTrades(true);
+			// hold the gate until the armies themselves have finished downloading
+			while (alive && !battle.modelsReady) await new Promise((r) => setTimeout(r, 200));
 			ready = true;
 
 			tick(); clockTimer = setInterval(tick, 1000);
@@ -317,7 +319,7 @@
 				<span class="green">war chariots</span> through the ranks, and whales awaken beast-headed
 				<span class="green">guardians</span> of the Duat. The price drives the front. The war never stops.
 			</p>
-			<button class="enter-btn" onclick={enter} disabled={!ready}><span>{ready ? 'ENTER THE BATTLEFIELD' : 'LOADING ORDER FLOW…'}</span></button>
+			<button class="enter-btn" onclick={enter} disabled={!ready}><span>{ready ? 'ENTER THE BATTLEFIELD' : 'MUSTERING THE ARMIES…'}</span></button>
 			<div class="intro-hint mono">W A S D PAN · SCROLL ZOOM · DRAG ORBIT · SOUND ON</div>
 		</div>
 	</div>

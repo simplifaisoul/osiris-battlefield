@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export type Team = 'bull' | 'bear';
 export type Role = 'spear' | 'duelist' | 'archer' | 'chariot' | 'guardian';
@@ -87,12 +88,16 @@ export class CharacterPool {
 		const keys = Object.keys(MODELS);
 		const loaded = await Promise.all(keys.map((k) => loader.loadAsync(MODELS[k])));
 		keys.forEach((k, i) => (this.templates[k] = { scene: loaded[i].scene, clips: loaded[i].animations }));
+		// Each character ships as ~6 separate skinned body-part meshes that all share
+		// ONE material and ONE skeleton — merging them collapses 6 draw calls per
+		// fighter into 1, which is the difference between 36fps and a smooth army.
+		for (const k of keys) this.mergeBody(this.templates[k].scene);
 		// tint each faction's own materials with a faint emissive so teams read from the war camera
 		for (const k of keys) {
 			const bear = k.startsWith('skel');
 			this.templates[k].scene.traverse((o) => {
 				const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-				if (m && !Array.isArray(m) && 'emissive' in m) { m.emissive = new THREE.Color(TINT[bear ? 'bear' : 'bull']); m.emissiveIntensity = 0.1; }
+				if (m && !Array.isArray(m) && 'emissive' in m) { m.emissive = new THREE.Color(TINT[bear ? 'bear' : 'bull']); m.emissiveIntensity = 0.055; }
 			});
 		}
 		// lift the weapon meshes out of the Adventurers to arm the skeletons
@@ -111,6 +116,25 @@ export class CharacterPool {
 		this.ready = true;
 	}
 
+	// collapse a character's body-part skinned meshes into one mesh per material
+	private mergeBody(root: THREE.Object3D) {
+		const parts: THREE.SkinnedMesh[] = [];
+		root.traverse((o) => { if ((o as THREE.SkinnedMesh).isSkinnedMesh) parts.push(o as THREE.SkinnedMesh); });
+		if (parts.length < 2) return;
+		const head = parts[0];
+		const group = parts.filter((s) => s.material === head.material && s.skeleton === head.skeleton && s.parent === head.parent);
+		if (group.length < 2) return;
+		let merged: THREE.BufferGeometry | null = null;
+		try { merged = mergeGeometries(group.map((s) => s.geometry), false); } catch { merged = null; }
+		if (!merged) return; // mismatched attributes — leave the character as-is
+		const mesh = new THREE.SkinnedMesh(merged, head.material as THREE.Material);
+		mesh.name = 'body_merged';
+		mesh.frustumCulled = false;
+		head.parent!.add(mesh);
+		mesh.bind(head.skeleton, head.bindMatrix);
+		for (const s of group) s.parent?.remove(s);
+	}
+
 	claim(team: Team, role: Role): number {
 		if (!this.ready || !this.scene) return -1;
 		let idx = this.pool.findIndex((h) => h.free && h.team === team && h.role === role);
@@ -120,12 +144,18 @@ export class CharacterPool {
 			const tpl = this.templates[def.model];
 			if (!tpl) return -1;
 			const obj = skeletonClone(tpl.scene) as THREE.Object3D;
-			obj.traverse((o) => { if ((o as THREE.Mesh).isMesh || (o as THREE.SkinnedMesh).isSkinnedMesh) (o as THREE.Mesh).castShadow = true; });
+			// no real shadow casting — the engine grounds every fighter with an
+			// instanced blob shadow instead (see buildUnitShadows)
+			obj.traverse((o) => { if ((o as THREE.Mesh).isMesh || (o as THREE.SkinnedMesh).isSkinnedMesh) (o as THREE.Mesh).castShadow = false; });
 			// arm it: hide the bundled weapons we don't want (Adventurers) or clone
 			// weapon meshes onto the hand bones (Skeletons)
 			if (def.show) {
+				// strip the unused weapons out of the hierarchy entirely — hidden meshes
+				// still cost a world-matrix update every frame for every fighter
 				const keep = new Set(def.show);
-				obj.traverse((o) => { if (/sword|shield|axe|knife|crossbow|bow|spike|rectangle|badge|offhand/i.test(o.name) && (o as THREE.Mesh).isMesh) o.visible = keep.has(o.name); });
+				const drop: THREE.Object3D[] = [];
+				obj.traverse((o) => { if (/sword|shield|axe|knife|crossbow|bow|spike|rectangle|badge|offhand/i.test(o.name) && (o as THREE.Mesh).isMesh && !keep.has(o.name)) drop.push(o); });
+				for (const o of drop) o.parent?.remove(o);
 			}
 			if (def.attach) {
 				const slots: Record<string, THREE.Object3D> = {};

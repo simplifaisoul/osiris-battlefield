@@ -71,7 +71,9 @@ const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
 const FRONT_MAX = 50;
 const CAP = FRONT_MAX + 19;
-const ARENA_Z = 54;
+// the fighting band is deliberately tight: a compact front makes ~60 real
+// characters a side read as a massed army instead of a scattered skirmish line
+const ARENA_Z = 28;
 // the battlefield is a bounded board floating in a dark void
 const BOARD_W = 200;
 const BOARD_D = 150;
@@ -246,7 +248,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.06; private camPitch = 0.46; private camZoom = 0.85; private zoomPunch = 0;
+	private camYaw = 0.06; private camPitch = 0.42; private camZoom = 0.85; private zoomPunch = 0;
 	// cinematic "featured combatant": hold on one legend for a beat so the camera
 	// doesn't twitch between heroes; prefer gods, then whoever has fought longest
 	private featuredWallet: string | null = null; private featuredUntil = 0;
@@ -265,7 +267,11 @@ export class Battle {
 	private chars = new CharacterPool();
 	// units over this many alive per side stop mustering reinforcements; real trades
 	// always deploy. Keeps the field a readable clash of pro characters, not a mob.
-	private SIDE_CAP = 60;
+	private SIDE_CAP = 70;
+
+	// the intro must not release the player into an empty field while ~20MB of
+	// character models are still streaming in
+	get modelsReady(): boolean { return this.chars.ready; }
 	private _camTarget = new THREE.Vector3(); private _camPos = new THREE.Vector3();
 	private q = new THREE.Quaternion(); private upV = new THREE.Vector3(0, 1, 0); private vTmp = new THREE.Vector3();
 
@@ -309,6 +315,7 @@ export class Battle {
 		this.buildSmoke();
 		this.buildEmbers();
 		this.buildStandards();
+		this.buildUnitShadows();
 		this.buildDecals();
 		this.buildAuras();
 
@@ -861,6 +868,20 @@ export class Battle {
 		this.souls.frustumCulled = false; this.scene.add(this.souls);
 	}
 
+	// Blob shadows. A KayKit character is ~20 separate skinned meshes, so real
+	// shadow-casting meant 1000+ extra draws per frame (8ms — half the budget) for
+	// an army. One instanced soft circle per fighter grounds them for almost nothing.
+	private unitShadows!: THREE.InstancedMesh;
+	private buildUnitShadows() {
+		const geo = new THREE.CircleGeometry(1, 14); geo.rotateX(-Math.PI / 2);
+		const mat = new THREE.MeshBasicMaterial({ map: radialTexture('rgba(0,0,0,0.5)'), transparent: true, opacity: 0.5, depthWrite: false });
+		this.unitShadows = new THREE.InstancedMesh(geo, mat, 240);
+		this.unitShadows.frustumCulled = false;
+		this.unitShadows.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+		this.unitShadows.count = 0;
+		this.scene.add(this.unitShadows);
+	}
+
 	private buildDecals() {
 		// battle scars where warriors fall — fade out by shrinking
 		const geo = new THREE.CircleGeometry(0.85, 10); geo.rotateX(-Math.PI / 2);
@@ -942,7 +963,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.46; this.camZoom = 0.85; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.42; this.camZoom = 0.85; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -999,8 +1020,20 @@ export class Battle {
 	}
 
 	private addUnit(team: Team, cls: Cls, tier: Tier, wallet: string, legend: boolean, atFront: boolean, gated = false): Unit | null {
-		// reinforcements/garrison stop at the side cap; real trades always deploy
-		if (gated && this.aliveCount(team) >= this.SIDE_CAP) return null;
+		// Hold each side at the cap. Reinforcements simply stop; a real trade always
+		// deploys, standing down the rear-most garrison soldier to make room — so the
+		// field can never outgrow the character pool (past it, units render as nothing).
+		if (this.aliveCount(team) >= this.SIDE_CAP) {
+			if (gated) return null;
+			let oi = -1, bestD = -1;
+			for (let i = 0; i < this.units.length; i++) {
+				const c = this.units[i];
+				if (c.team !== team || c.dying > 0 || c.legend || c.wallet) continue;
+				const d = Math.abs(c.x - this.frontX);
+				if (d > bestD) { bestD = d; oi = i; }
+			}
+			if (oi >= 0) { const old = this.units[oi]; if (old.char >= 0) this.chars.release(old.char); this.units.splice(oi, 1); }
+		}
 		const sign = team === 'bull' ? -1 : 1;
 		const st = CLASS_STATS[cls];
 		this.units.push({
@@ -1637,6 +1670,7 @@ export class Battle {
 	}
 
 	private updateUnits() {
+		let shadowN = 0;
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i];
 			// claim a character the moment the models finish streaming in
@@ -1656,7 +1690,18 @@ export class Battle {
 			const sink = u.dying > 0 && u.dying < 0.7 ? (1 - u.dying / 0.7) * 1.3 : 0;
 			const size = u.legend ? 1.32 : u.tier === 'CHAMPION' ? 1.14 : u.tier === 'ELITE' ? 1.06 : 1;
 			this.chars.pose(u.char, u.x, gy - sink, u.z, u.face, size, st);
+			// ground the fighter with a soft blob shadow, fading out as it sinks away
+			if (shadowN < 240) {
+				const d = this.dummy;
+				d.position.set(u.x, gy + 0.06, u.z);
+				d.rotation.set(0, 0, 0);
+				d.scale.setScalar(size * 1.05 * (u.dying > 0 ? Math.max(0, u.dying / 3) : 1));
+				d.updateMatrix();
+				this.unitShadows.setMatrixAt(shadowN++, d.matrix);
+			}
 		}
+		this.unitShadows.count = shadowN;
+		this.unitShadows.instanceMatrix.needsUpdate = true;
 		// retire fully-fallen units and free their character slots
 		for (let i = this.units.length - 1; i >= 0; i--) {
 			const u = this.units[i]; if (u.dying > 0 || u.hp > 0) continue;
@@ -1703,22 +1748,33 @@ export class Battle {
 			this.panX += (tx - this.panX) * Math.min(1, dt * 0.35);
 			this.panZ += (tz - this.panZ) * Math.min(1, dt * 0.3);
 		}
-		const target = this._camTarget.set(this.panX, 1, this.panZ);
+		// look slightly above the ground so fighters, not turf, sit in frame
+		const target = this._camTarget.set(this.panX, 2.2, this.panZ);
 		// hero-moment punch: a champion's arrival pulls the camera in for a beat
 		this.zoomPunch = Math.max(0, this.zoomPunch - dt * 0.9);
 		const punch = 1 - Math.sin(Math.min(1, this.zoomPunch) * Math.PI) * 0.14;
-		let radius = 60 * this.camZoom * punch;
-		let height = THREE.MathUtils.lerp(24, 128, this.camPitch) * (0.55 + this.camZoom * 0.45) * (punch * 0.3 + 0.7);
+
+		// TRUE SPHERICAL ORBIT. Elevation is its own axis, so zooming in moves the
+		// camera CLOSER at the same cinematic angle instead of swinging overhead —
+		// the old height/radius split made close-ups stare down at the tops of helmets,
+		// which is what made these characters read as blobs.
+		let elev = THREE.MathUtils.lerp(0.22, 1.15, this.camPitch); // ~13° low and filmic → ~66° tactical
+		let dist = 78 * this.camZoom * punch;
 
 		if (this.focus) {
 			const tracked = this.units.find((u) => u.tracked && u.dying <= 0);
-			if (tracked) { target.set(tracked.x, 3, tracked.z); radius = 26 * this.camZoom; height = 22 * this.camZoom; }
+			if (tracked) { target.set(tracked.x, 2.6, tracked.z); dist = 22 * this.camZoom; elev = Math.min(elev, 0.5); }
 		}
 
+		const horiz = Math.cos(elev) * dist, height = Math.sin(elev) * dist;
 		const shakeX = this.shake > 0 ? (Math.random() - 0.5) * this.shake * 2 : 0, shakeY = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
 		this.shake = Math.max(0, this.shake - dt * 1.4);
-		this.camera.position.lerp(this._camPos.set(target.x + Math.sin(this.camYaw) * radius + shakeX, height + shakeY, target.z + Math.cos(this.camYaw) * radius), Math.min(1, dt * 2.6));
+		this.camera.position.lerp(this._camPos.set(target.x + Math.sin(this.camYaw) * horiz + shakeX, target.y + height + shakeY, target.z + Math.cos(this.camYaw) * horiz), Math.min(1, dt * 2.6));
 		this.camera.lookAt(target);
+
+		// the market-cap pill is a world-space sprite — fade it out as the camera closes
+		// in, or it fills the frame right when you want to watch the fighting
+		(this.mcapSprite.material as THREE.SpriteMaterial).opacity = THREE.MathUtils.clamp((this.camZoom - 0.3) / 0.25, 0, 1);
 
 		// waving banners
 		for (let i = 0; i < this.flags.length; i++) {
