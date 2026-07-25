@@ -53,15 +53,14 @@ type Unit = {
 	char: number;
 };
 
-// the war breathes like a real field battle:
-// FORM (dress ranks, champions duel between the hosts) → ADVANCE (walk forward in step under
-// massed volleys) → CHARGE (horns, final sprint) → MELEE (open fighting) → REGROUP (carry the
-// line back, re-dress, recover the wounded)
+// the war is a brawl, not a parade: the hosts collide and fight almost the whole
+// time. The phases now mostly colour the drama (a brief muster, a charge horn, a
+// short regroup) while MELEE dominates — units seek and kill continuously.
 export type WarPhase = 'form' | 'advance' | 'charge' | 'melee' | 'regroup';
-const PHASE_CYCLE = 47; // seconds per full rhythm — a slow, deliberate war
+const PHASE_CYCLE = 34; // seconds per full rhythm
 function phaseAt(t: number): WarPhase {
 	const T = t % PHASE_CYCLE;
-	return T < 10 ? 'form' : T < 18 ? 'advance' : T < 21 ? 'charge' : T < 37 ? 'melee' : 'regroup';
+	return T < 2 ? 'form' : T < 4 ? 'advance' : T < 6 ? 'charge' : T < 30 ? 'melee' : 'regroup';
 }
 
 // per-class attack pacing (seconds between strikes)
@@ -248,7 +247,7 @@ export class Battle {
 	private totalKills = 0; private biggestWhaleUsd = 0; private biggestWhaleWallet = '';
 	private lastGarrison = { bulls: 60, bears: 60 };
 
-	private camYaw = 0.06; private camPitch = 0.42; private camZoom = 0.85; private zoomPunch = 0;
+	private camYaw = 0.06; private camPitch = 0.4; private camZoom = 0.6; private zoomPunch = 0;
 	// cinematic "featured combatant": hold on one legend for a beat so the camera
 	// doesn't twitch between heroes; prefer gods, then whoever has fought longest
 	private featuredWallet: string | null = null; private featuredUntil = 0;
@@ -748,7 +747,7 @@ export class Battle {
 		const c = document.createElement('canvas'); c.width = 512; c.height = 200; this.mcapCanvas = c;
 		this.mcapTex = new THREE.CanvasTexture(c); this.mcapTex.colorSpace = THREE.SRGBColorSpace;
 		this.mcapSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.mcapTex, transparent: true, depthTest: false }));
-		this.mcapSprite.scale.set(18, 7, 1);
+		this.mcapSprite.scale.set(12, 4.6, 1);
 		this.mcapSprite.renderOrder = 999;
 		this.scene.add(this.mcapSprite);
 		this.setMarketCap('—', 0);
@@ -963,7 +962,7 @@ export class Battle {
 	setReinforceRates(b: number, s: number) { this.reinB = b; this.reinS = s; }
 	setTrackWallet(w: string | null) { this.trackWallet = w ? w.trim() : null; for (const u of this.units) u.tracked = !!this.trackWallet && u.wallet === this.trackWallet; }
 	setFocus(f: boolean) { this.focus = f; }
-	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.42; this.camZoom = 0.85; this.panX = 0; this.panZ = 0; }
+	resetCamera() { this.manualUntil = 0; this.camYaw = 0.06; this.camPitch = 0.4; this.camZoom = 0.6; this.panX = 0; this.panZ = 0; }
 
 	spawnGarrison(bulls: number, bears: number) {
 		this.lastGarrison = { bulls, bears };
@@ -1415,10 +1414,11 @@ export class Battle {
 			if (dueling) {
 				u.target = u === this.duelA ? this.duelB : this.duelA;
 			} else if (u.retarget <= 0 || !u.target || u.target.hp <= 0 || u.target.dying > 0) {
-				const range = u.ranged ? 34 : shaken ? 5 : wp === 'charge' ? 30 : wp === 'melee' ? ACQUIRE_R : 5;
-				// flankers raid the enemy's archer line when the melee opens
-				u.target = (u.flank && wp === 'melee' ? acquire(u, 36, true) : null) || acquire(u, range);
-				u.retarget = 0.3 + Math.random() * 0.3;
+				// melee units ALWAYS hunt for a foe across a wide range — the two hosts
+				// press together and fight, they never just stand in formation
+				const range = u.ranged ? 34 : shaken ? 7 : 30;
+				u.target = (u.flank ? acquire(u, 40, true) : null) || acquire(u, range);
+				u.retarget = 0.25 + Math.random() * 0.25;
 			}
 
 			let desiredFace: number | null = null;
@@ -1440,15 +1440,15 @@ export class Battle {
 						u.strike = 0.3;
 					}
 				}
-			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0 && (dueling || !holding || this.inContact(u, u.target))) {
+			} else if (u.target && u.target.dying <= 0 && u.target.hp > 0) {
 				const t = u.target;
 				const dx = t.x - u.x, dz = t.z - u.z;
 				const dist = Math.hypot(dx, dz);
 				const reach = (u.scale + t.scale) * 0.5 * UNIT_SCALE * 1.1 + (u.cls === 'guardian' ? 1.1 : 0.45);
 				desiredFace = Math.atan2(-dz, dx);
 				if (dist > reach) {
-					// close with the enemy — a sounded charge doubles the fury
-					const step = Math.min(dist - reach * 0.9, u.speed * (wp === 'charge' ? 1.7 : 1) * dt);
+					// close with the enemy — always advancing into the fight
+					const step = Math.min(dist - reach * 0.9, u.speed * (wp === 'charge' ? 1.7 : 1.15) * dt);
 					u.x += (dx / dist) * step; u.z += (dz / dist) * step;
 					u.melee = dist < reach * 3;
 					// dust kicked up under the charge
@@ -1494,18 +1494,16 @@ export class Battle {
 				if (d > 1) { const st2 = Math.min(d, u.speed * 1.1 * dt); u.x += (dx / d) * st2; u.z += (dz / d) * st2; }
 				desiredFace = Math.atan2(-dz, dx);
 			} else {
-				// DRESS RANKS — hold a formation post behind the front. The hosts stand apart to
-				// form, walk forward together on the advance, and pour through on the charge.
+				// no foe in reach (only at a campaign's first breath, or after a rout):
+				// march straight to the front line and press across into the enemy so a
+				// fresh fight starts immediately — never hold back in formation.
 				u.melee = false;
-				if (holding && !dueling) u.target = null;
-				const base = holding ? (wp === 'advance' ? 3.2 : 8) : 2.4;
-				const press = wp === 'charge' ? -5.5 : wp === 'melee' ? -0.5 : 0;
-				const rowEff = u.row + (shaken ? 4 : 0); // the wounded fall back through the ranks
-				const fx2 = this.frontX + u.sign * (base + rowEff * 1.7 + press);
-				const fz2 = THREE.MathUtils.clamp(u.slot, -ARENA_Z + 2, ARENA_Z - 2);
+				const shakenBack = shaken ? 3 : 0; // the badly wounded ease back a step
+				const fx2 = this.frontX + u.sign * (0.5 + (u.row * 0.7) + shakenBack);
+				const fz2 = THREE.MathUtils.clamp(u.slot * 0.5, -ARENA_Z + 2, ARENA_Z - 2);
 				const ddx = fx2 - u.x, ddz = fz2 - u.z, dd = Math.hypot(ddx, ddz);
 				if (dd > 0.15) {
-					const st2 = Math.min(dd, u.speed * (wp === 'charge' ? 1.6 : 1) * dt);
+					const st2 = Math.min(dd, u.speed * 1.2 * dt);
 					u.x += (ddx / dd) * st2; u.z += (ddz / dd) * st2;
 				}
 				desiredFace = u.sign < 0 ? 0 : Math.PI; // eyes on the enemy line
@@ -1584,7 +1582,7 @@ export class Battle {
 			st.grp.position.y = groundY(st.grp.position.x, st.grp.position.z);
 		}
 		// the market-cap marker rides the front line (its altitude on the hill)
-		this.mcapSprite.position.set(this.frontX, hillY(this.frontX) + 11 + Math.sin(this.time * 1.5) * 0.4, 0);
+		this.mcapSprite.position.set(this.frontX, hillY(this.frontX) + 15 + Math.sin(this.time * 1.5) * 0.4, 0);
 
 		this._bullPower = bullPower; this._bearPower = bearPower; this._bullCount = bullCount; this._bearCount = bearCount; this._bullComp = bc; this._bearComp = rc;
 	}
@@ -1774,7 +1772,7 @@ export class Battle {
 
 		// the market-cap pill is a world-space sprite — fade it out as the camera closes
 		// in, or it fills the frame right when you want to watch the fighting
-		(this.mcapSprite.material as THREE.SpriteMaterial).opacity = THREE.MathUtils.clamp((this.camZoom - 0.3) / 0.25, 0, 1);
+		(this.mcapSprite.material as THREE.SpriteMaterial).opacity = THREE.MathUtils.clamp((this.camZoom - 0.42) / 0.28, 0, 0.92);
 
 		// waving banners
 		for (let i = 0; i < this.flags.length; i++) {
