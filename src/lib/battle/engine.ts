@@ -7,6 +7,7 @@ import {
 import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
 import { CharacterPool, type CharState, type Role } from './characters';
+import { Scenery } from './scenery';
 
 export type Team = 'bull' | 'bear';
 export type Cls = 'spear' | 'duelist' | 'archer' | 'guardian' | 'chariot';
@@ -264,6 +265,7 @@ export class Battle {
 	private flags: THREE.Mesh[] = [];
 	private dummy = new THREE.Object3D(); private tmpColor = new THREE.Color();
 	private chars = new CharacterPool();
+	private scenery = new Scenery();
 	// units over this many alive per side stop mustering reinforcements; real trades
 	// always deploy. Keeps the field a readable clash of pro characters, not a mob.
 	private SIDE_CAP = 70;
@@ -321,6 +323,11 @@ export class Battle {
 		// the whole army streams in as real animated characters; units spawned before
 		// the models arrive simply pop in once ready (claim() no-ops until then)
 		this.chars.load(this.scene).catch(() => {});
+		// real CC0 world models (trees, rocks, castles, crates) dress the field on arrival
+		this.scenery
+			.load(this.scene, ['tree_single_A', 'tree_single_B', 'rock_single_A', 'rock_single_C', 'rock_single_E', 'crate_A_big', 'barrel', 'building_castle_green', 'building_castle_red'])
+			.then(() => this.dressScenery())
+			.catch(() => {});
 
 		this.on(window, 'resize', () => this.resize());
 		// GPU resets (driver TDR, tab backgrounding) must not leave a dead canvas
@@ -460,84 +467,9 @@ export class Battle {
 	}
 
 	private buildProps() {
-		const parts: THREE.BufferGeometry[] = [];
-		const rng = (a: number, b: number) => a + Math.random() * (b - a);
-		const onRoad = (z: number) => Math.abs(z - ROAD_Z) < 3.4;
-		// date palms — leaning trunk with a crown of drooping fronds
-		const palmAt = (x: number, z: number, s: number, green: string) => {
-			const y = this.terrainH(x, z);
-			const lean = rng(-0.14, 0.14);
-			const trunk = paint(new THREE.CylinderGeometry(0.1 * s, 0.17 * s, 2.0 * s, 6), '#7a5a30');
-			trunk.rotateZ(lean); trunk.translate(x, y + 1.0 * s, z);
-			const topX = x - Math.sin(lean) * 1.0 * s, topY = y + 2.0 * s;
-			for (let f = 0; f < 6; f++) {
-				const a = (f / 6) * Math.PI * 2 + rng(0, 0.5);
-				const frond = paint(new THREE.BoxGeometry(1.35 * s, 0.06 * s, 0.3 * s), green);
-				frond.translate(0.62 * s, 0, 0); frond.rotateZ(-0.5); frond.rotateY(a);
-				frond.translate(topX, topY, z);
-				parts.push(frond);
-			}
-			const crown = paint(new THREE.SphereGeometry(0.16 * s, 6, 5), '#5a4020'); crown.translate(topX, topY, z);
-			parts.push(trunk, crown);
-		};
-		// palm groves across BOTH territories — clear of the road, the fighting lane, and the
-		// board rim (rim palms silhouette into black smudges against the night sky)
-		for (let i = 0; i < 220; i++) {
-			const x = rng(-BOARD_W / 2 + 15, BOARD_W / 2 - 15);
-			const z = rng(-BOARD_D / 2 + 13, BOARD_D / 2 - 13);
-			if (onRoad(z)) continue;
-			if (Math.abs(x) < CAP - 6 && Math.abs(z) < ARENA_Z - 4 && Math.random() < 0.82) continue;
-			const bull = x < 0;
-			const green = bull ? (Math.random() < 0.5 ? '#3d9a44' : '#4fb44c') : (Math.random() < 0.5 ? '#8a9a3a' : '#a8963c');
-			palmAt(x, z, rng(0.8, 1.4), green);
-		}
-		// obelisks flanking the road in each territory
-		const obeliskAt = (x: number, z: number, s: number) => {
-			const y = this.terrainH(x, z);
-			const base = paint(new THREE.BoxGeometry(1.3 * s, 0.5 * s, 1.3 * s), '#b9a274'); base.translate(x, y + 0.25 * s, z);
-			const shaft = paint(new THREE.CylinderGeometry(0.28 * s, 0.45 * s, 4.6 * s, 4), '#cdb684'); shaft.rotateY(Math.PI / 4); shaft.translate(x, y + 2.8 * s, z);
-			const tip = paint(new THREE.ConeGeometry(0.4 * s, 0.6 * s, 4), '#ffd34d'); tip.rotateY(Math.PI / 4); tip.translate(x, y + 5.4 * s, z);
-			parts.push(base, shaft, tip);
-		};
-		for (const [ox, oz, os] of [[-44, 14.5, 1], [-44, 3.5, 1], [48, 14.5, 1.1], [48, 3.5, 1.1], [-78, -30, 0.8], [76, 38, 0.8]] as const) obeliskAt(ox, oz, os);
-		// war-torn debris across the fighting ground: rocks, fallen spears, dropped
-		// shields, old bones — the arena reads as a field that has seen years of war
-		for (let i = 0; i < 60; i++) {
-			const x = rng(-BOARD_W / 2 + 8, BOARD_W / 2 - 8), z = rng(-BOARD_D / 2 + 8, BOARD_D / 2 - 8);
-			if (onRoad(z)) continue;
-			// low-poly squashed sphere reads as a boulder (and stays merge-compatible —
-			// polyhedron geometries are non-indexed and would break mergeGeometries)
-			const rock = paint(new THREE.SphereGeometry(rng(0.16, 0.42), 6, 4), Math.random() < 0.5 ? '#6b6154' : '#7d7060');
-			rock.scale(1, rng(0.45, 0.75), rng(0.75, 1.1));
-			rock.rotateY(rng(0, Math.PI)); rock.translate(x, this.terrainH(x, z) + 0.1, z);
-			parts.push(rock);
-		}
-		for (let i = 0; i < 26; i++) {
-			const x = rng(-52, 52), z = rng(-ARENA_Z + 4, ARENA_Z - 4);
-			if (onRoad(z)) continue;
-			const spear = paint(new THREE.CylinderGeometry(0.04, 0.04, rng(1.7, 2.4), 5), '#5e4426');
-			spear.rotateZ(Math.PI / 2); spear.rotateY(rng(0, Math.PI)); spear.translate(x, this.terrainH(x, z) + 0.06, z);
-			parts.push(spear);
-		}
-		for (let i = 0; i < 16; i++) {
-			const x = rng(-48, 48), z = rng(-ARENA_Z + 4, ARENA_Z - 4);
-			if (onRoad(z)) continue;
-			const shield = paint(new THREE.CylinderGeometry(0.46, 0.46, 0.07, 12), x < 0 ? '#1c5c34' : '#6e2230');
-			shield.rotateX(rng(-0.12, 0.12)); shield.translate(x, this.terrainH(x, z) + 0.08, z);
-			const boss2 = paint(new THREE.SphereGeometry(0.1, 6, 5), '#8a733c'); boss2.translate(x, this.terrainH(x, z) + 0.16, z);
-			parts.push(shield, boss2);
-		}
-		for (let i = 0; i < 14; i++) {
-			const x = rng(-40, 40), z = rng(-ARENA_Z + 6, ARENA_Z - 6);
-			if (onRoad(z)) continue;
-			const skull2 = paint(new THREE.SphereGeometry(rng(0.12, 0.17), 7, 6), '#cfc4a8');
-			skull2.translate(x, this.terrainH(x, z) + 0.12, z);
-			parts.push(skull2);
-		}
-		const merged = mergeGeometries(parts, false)!; merged.computeVertexNormals();
-		const mesh = new THREE.Mesh(merged, toonMaterial()); mesh.castShadow = true; mesh.receiveShadow = true; this.scene.add(mesh);
-
-		// war-torches line the road and ring the capitals — self-lit embers against the night
+		// The only procedural set-dressing left is the war-torches: self-lit ember
+		// points that make the night feel lit. Trees, rocks, castles, banners and
+		// crates are real CC0 models placed by the Scenery loader once it streams in.
 		const poles: THREE.BufferGeometry[] = [];
 		const flames: THREE.BufferGeometry[] = [];
 		const torchAt = (x: number, z: number) => {
@@ -555,53 +487,55 @@ export class Battle {
 		this.scene.add(new THREE.Mesh(pm, toonMaterial()));
 		const fm = mergeGeometries(flames, false)!;
 		this.scene.add(new THREE.Mesh(fm, new THREE.MeshBasicMaterial({ vertexColors: true }))); // unlit — burns bright at night
+	}
 
-		// oases — dark moonlit pools, one deep in each territory
-		const lakeMat = new THREE.MeshBasicMaterial({ color: 0x1d4a68, transparent: true, opacity: 0.62 });
-		for (const [lx, lz, r] of [[-54, -40, 10], [60, 42, 11]] as const) {
-			const lake = new THREE.Mesh(new THREE.CircleGeometry(r, 24), lakeMat);
-			lake.rotation.x = -Math.PI / 2; lake.scale.y = 0.6; lake.position.set(lx, this.terrainH(lx, lz) + 0.12, lz);
-			this.scene.add(lake);
+	// scatter real trees/rocks and raise the castles once the models arrive
+	private dressScenery() {
+		const rng = (a: number, b: number) => a + Math.random() * (b - a);
+		const onRoad = (z: number) => Math.abs(z - ROAD_Z) < 4;
+		type P = { x: number; z: number; y?: number; s: number; r: number };
+		const trees: P[] = [], rocksA: P[] = [], rocksB: P[] = [];
+		for (let i = 0; i < 150; i++) {
+			const x = rng(-BOARD_W / 2 + 12, BOARD_W / 2 - 12);
+			const z = rng(-BOARD_D / 2 + 10, BOARD_D / 2 - 10);
+			if (onRoad(z)) continue;
+			// keep the fighting band and the ground right in front of the castles clear
+			if (Math.abs(x) < CAP - 4 && Math.abs(z) < ARENA_Z - 2) continue;
+			(Math.random() < 0.7 ? trees : rocksA).push({ x, z, y: this.terrainH(x, z), s: rng(2.6, 4.4), r: rng(0, Math.PI * 2) });
 		}
-
-		// mud-brick villages — flat-roofed adobe blocks in the back corners
-		const vparts: THREE.BufferGeometry[] = [];
-		const houseAt = (x: number, z: number, wall: string) => {
-			const y = this.terrainH(x, z);
-			const h = rng(0.9, 1.4);
-			const base = paint(new THREE.BoxGeometry(rng(1.4, 2.0), h, rng(1.2, 1.8)), wall); base.translate(x, y + h / 2, z);
-			const roof = paint(new THREE.BoxGeometry(1.1, 0.16, 0.9), '#8a6a3c'); roof.translate(x + rng(-0.3, 0.3), y + h + 0.08, z + rng(-0.2, 0.2));
-			const door = paint(new THREE.BoxGeometry(0.3, 0.5, 0.08), '#3a2a16'); door.translate(x, y + 0.25, z + 0.86);
-			vparts.push(base, roof, door);
-		};
-		for (const [vx, vz] of [[-76, 52], [74, -52], [-84, -44], [80, 48]] as const)
-			for (let k = 0; k < 4; k++) houseAt(vx + rng(-4, 4), vz + rng(-4, 4), Math.random() < 0.5 ? '#d8c9a8' : '#c8ab7e');
-		const vm = mergeGeometries(vparts, false)!; vm.computeVertexNormals();
-		const vmesh = new THREE.Mesh(vm, toonMaterial()); vmesh.castShadow = true; this.scene.add(vmesh);
+		// a scattering of small stones across the arena floor for lived-in texture
+		for (let i = 0; i < 40; i++) {
+			const x = rng(-56, 56), z = rng(-ARENA_Z + 3, ARENA_Z - 3);
+			if (onRoad(z)) continue;
+			rocksB.push({ x, z, y: this.terrainH(x, z), s: rng(1.4, 2.6), r: rng(0, Math.PI * 2) });
+		}
+		this.scenery.scatter('tree_single_A', trees.filter((_, i) => i % 2 === 0));
+		this.scenery.scatter('tree_single_B', trees.filter((_, i) => i % 2 === 1));
+		this.scenery.scatter('rock_single_C', rocksA);
+		this.scenery.scatter('rock_single_A', rocksB.filter((_, i) => i % 2 === 0));
+		this.scenery.scatter('rock_single_E', rocksB.filter((_, i) => i % 2 === 1));
+		// crates and barrels stacked around each castle's muster yard
+		const supplies: P[] = [];
+		for (const cx of [-CAP, CAP]) for (let k = 0; k < 5; k++) supplies.push({ x: cx + rng(-6, 6), z: rng(-10, 10), y: this.terrainH(cx, 0), s: rng(2.2, 3), r: rng(0, Math.PI * 2) });
+		this.scenery.scatter('crate_A_big', supplies.filter((_, i) => i % 2 === 0));
+		this.scenery.scatter('barrel', supplies.filter((_, i) => i % 2 === 1));
+		// raise each host's castle where the old ziggurat stood
+		this.scenery.place('building_castle_green', -CAP, 0, 0, 5.5, Math.PI / 2);
+		this.scenery.place('building_castle_red', CAP, 0, 0, 5.5, -Math.PI / 2);
 	}
 
 	private buildCapital(team: Team, x: number): THREE.Group {
 		const p = PAL[team];
 		const grp = new THREE.Group();
-		const parts: THREE.BufferGeometry[] = [];
-		// obsidian ziggurat — black stone stepped in shadow, gold-trimmed, crowned in team fire
-		const steps = [ [14, 3.4], [10.5, 3.0], [7.4, 2.7], [4.6, 2.4] ] as const;
-		let y = 0;
-		steps.forEach(([w, h], i) => {
-			const b = paint(new THREE.BoxGeometry(w, h, w), i % 2 ? '#211d2a' : '#2b2536'); b.translate(0, y + h / 2, 0); y += h;
-			parts.push(b);
-			const trim = paint(new THREE.BoxGeometry(w + 0.4, 0.3, w + 0.4), p.accent); trim.translate(0, y, 0); parts.push(trim);
-		});
-		const geo = mergeGeometries(parts, false)!; geo.computeVertexNormals();
-		const body = new THREE.Mesh(geo, toonMaterial()); body.castShadow = true; grp.add(body);
-		// glowing capstone
-		const cap = new THREE.Mesh(new THREE.ConeGeometry(2, 2.6, 4), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0x7dffb0 : 0xff8a95 }));
-		cap.position.y = y + 1.3; cap.rotation.y = Math.PI / 4; grp.add(cap);
-		// banner
-		const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.1, 0.1, 5.4, 6), '#7a4c26'), toonMaterial());
-		pole.position.set(0, y + 2.6, 0); grp.add(pole);
-		const flag = new THREE.Mesh(paint(new THREE.PlaneGeometry(3.4, 1.9), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
-		flag.position.set(1.8, y + 4.4, 0); grp.add(flag);
+		// the castle itself is a real model placed by Scenery once loaded; here we only
+		// raise the animated team banner above it and a glowing beacon so the base reads
+		// from across the field. The group is the logic anchor (strikes/wins/camera).
+		const beacon = new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.2, 4), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0x7dffb0 : 0xff8a95 }));
+		beacon.position.y = 20; beacon.rotation.y = Math.PI / 4; grp.add(beacon);
+		const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.12, 0.12, 8, 6), '#4a3220'), toonMaterial());
+		pole.position.set(0, 18, 0); grp.add(pole);
+		const flag = new THREE.Mesh(paint(new THREE.PlaneGeometry(4, 2.3), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
+		flag.position.set(2.1, 20.5, 0); grp.add(flag);
 		this.flags.push(flag);
 		grp.position.set(x, 0, 0);
 		this.scene.add(grp);
@@ -655,23 +589,14 @@ export class Battle {
 			const p = PAL[team];
 			const side = team === 'bull' ? -1 : 1;
 			const grp = new THREE.Group();
-			const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.09, 0.12, 7.2, 6), '#4a3220'), toonMaterial());
-			pole.position.y = 3.6; grp.add(pole);
-			const bar = new THREE.Mesh(paint(new THREE.BoxGeometry(1.7, 0.12, 0.12), p.accent), toonMaterial());
-			bar.position.y = 6.3; grp.add(bar);
-			// winged sun-disc emblem
-			const disc = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0xffd34d : 0xff8a5a }));
-			disc.position.y = 7.0; grp.add(disc);
-			for (const s of [-1, 1]) {
-				const wing = new THREE.Mesh(paint(new THREE.BoxGeometry(0.9, 0.1, 0.26), p.accent), toonMaterial());
-				wing.position.set(0.7 * s, 7.05, 0); wing.rotation.z = 0.35 * s; grp.add(wing);
-			}
-			// hanging banner cloth
-			const cloth = new THREE.Mesh(paint(new THREE.PlaneGeometry(1.5, 2.6), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
-			cloth.position.set(0, 5.0, 0); grp.add(cloth);
-			const trim = new THREE.Mesh(paint(new THREE.BoxGeometry(1.6, 0.14, 0.1), p.accent), toonMaterial());
-			trim.position.y = 3.72; grp.add(trim);
-			grp.position.set(side * 8, 0, 26);
+			// a plain war-banner that marches with the host's edge of the front
+			const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.08, 0.1, 6.4, 6), '#4a3220'), toonMaterial());
+			pole.position.y = 3.2; grp.add(pole);
+			const finial = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.5, 6), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0x7dffb0 : 0xff8a95 }));
+			finial.position.y = 6.6; grp.add(finial);
+			const cloth = new THREE.Mesh(paint(new THREE.PlaneGeometry(1.9, 2.8), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
+			cloth.position.set(1.0, 5.0, 0); grp.add(cloth);
+			grp.position.set(side * 8, 0, ARENA_Z - 2);
 			this.scene.add(grp);
 			this.standards.push({ grp, cloth, side });
 		}

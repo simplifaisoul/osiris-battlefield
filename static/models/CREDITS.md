@@ -16,3 +16,8 @@ The skeletons ship bare with `handslot` bones; they are armed at runtime with
 weapon meshes cloned out of the Adventurers models (both packs share the same
 rig and animation library), so both armies wield the same swords, shields,
 daggers, crossbows, and axes.
+
+**World** — the trees, rocks, castles, banners, crates and barrels (in
+`hex/`) are from **KayKit Medieval Hexagon Pack** (CC0)
+(https://github.com/KayKit-Game-Assets/KayKit-Medieval-Hexagon-Pack-1.0),
+also by Kay Lousberg, sharing the one `hexagons_medieval.png` gradient atlas.
