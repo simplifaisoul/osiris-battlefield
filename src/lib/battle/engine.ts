@@ -294,7 +294,8 @@ export class Battle {
 		this.renderer.toneMapping = THREE.NoToneMapping;
 
 		this.scene.background = skyTexture();
-		this.scene.fog = new THREE.FogExp2(0x140a12, 0.0015);
+		// cold fog so the far field falls gently away into night — atmospheric depth
+		this.scene.fog = new THREE.FogExp2(0x0f0d18, 0.0019);
 
 		this.camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 700);
 		this.camera.position.set(0, 40, 60);
@@ -361,23 +362,30 @@ export class Battle {
 		this.composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: floatOk ? THREE.HalfFloatType : THREE.UnsignedByteType });
 		this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-		// one lean pass: neon bloom on emissives/tracers, filmic tone map, gentle vignette
-		const bloom = new BloomEffect({ intensity: 0.55, luminanceThreshold: 0.62, luminanceSmoothing: 0.3, mipmapBlur: true, radius: 0.65 });
+		// bloom on the true highlights, ACES tone map, deep cinematic vignette. The
+		// desaturated, filmic look now comes from the scene itself (muted ground +
+		// natural character tints), not a post grade — a colour-grade effect chained
+		// after tone mapping blew the ground out to white, so it is done in-scene.
+		const bloom = new BloomEffect({ intensity: 0.6, luminanceThreshold: 0.7, luminanceSmoothing: 0.28, mipmapBlur: true, radius: 0.72 });
 		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-		const vignette = new VignetteEffect({ offset: 0.22, darkness: 0.42 });
+		const vignette = new VignetteEffect({ offset: 0.28, darkness: 0.6 });
 		this.composer.addPass(new EffectPass(this.camera, bloom, tone, vignette));
 		this.composer.addPass(new EffectPass(this.camera, new SMAAEffect()));
 	}
 
 	private buildLights() {
-		// night war: bright silver moonlight key over a cool ambient bed, blood-red rim.
-		// intensities are deliberately hot — the ACES pass pulls them back into a readable night.
-		this.scene.add(new THREE.HemisphereLight(0x8698d8, 0x4a3a30, 1.25));
-		const moon = new THREE.DirectionalLight(0xcfdcff, 2.8);
-		moon.position.set(-34, 62, 26); moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
+		// dramatic night: a low ambient bed so forms keep their shadowed side, a strong
+		// cold moonlight KEY that sculpts every character, a warm low fill to lift the
+		// dark side off pure black, and a blood-red rim for menace. Directional shading
+		// gives the models real volume even without shadow maps.
+		this.scene.add(new THREE.HemisphereLight(0x6d7db0, 0x2a2018, 1.05));
+		const moon = new THREE.DirectionalLight(0xd0ddff, 2.9);
+		moon.position.set(-40, 66, 30); moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
 		const s = 100; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 220; moon.shadow.bias = -0.0004;
 		this.scene.add(moon);
-		const rim = new THREE.DirectionalLight(0xff5a4a, 1.1);
+		const fill = new THREE.DirectionalLight(0xffb060, 0.45);
+		fill.position.set(30, 20, 40); this.scene.add(fill);
+		const rim = new THREE.DirectionalLight(0xff5a4a, 0.95);
 		rim.position.set(38, 30, -46);
 		this.scene.add(rim);
 
@@ -417,36 +425,35 @@ export class Battle {
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
 		const colors = new Float32Array(pos.count * 3);
-		// night-war palette: moonlit moor vs ash waste, dark road, gold market-cap gridlines
-		const bullSoil = new THREE.Color('#4a7a30'), bearSoil = new THREE.Color('#6e5138');
-		const asphalt = new THREE.Color('#2e2e33'), dash = new THREE.Color('#c8c4b8'), grid = new THREE.Color('#ffd166');
-		const c = new THREE.Color();
+		// A real night battlefield, not a candy-coloured game board: dark muted grass
+		// across the whole field, a churned-mud scar of trampled earth down the fighting
+		// lane, and only a WHISPER of team-coloured soil out toward each host's castle.
+		const grass = new THREE.Color('#3c4e2d');   // moonlit turf
+		const mud = new THREE.Color('#3a3021');     // churned battle-earth
+		const bullEarth = new THREE.Color('#445831'); // faint cool green near the bull keep
+		const bearEarth = new THREE.Color('#524030'); // faint ashen brown near the bear keep
+		const roadCol = new THREE.Color('#302921');
+		const c = new THREE.Color(), tint = new THREE.Color();
 		for (let i = 0; i < pos.count; i++) {
 			const px = pos.getX(i), py = pos.getY(i);
 			const zTaper = THREE.MathUtils.clamp(1 - (Math.abs(py) - ARENA_Z) / 14, 0, 1);
-			// fade the noise out at the board rim too — dips below the skirt read as black holes
 			const edge = THREE.MathUtils.clamp(Math.min((BOARD_W / 2 - Math.abs(px)) / 10, (BOARD_D / 2 - Math.abs(py)) / 10), 0, 1);
 			const h = hillY(px) * zTaper + noise2D(px * 0.05, py * 0.05) * 0.35 * edge;
 			pos.setZ(i, h);
-			// held territory split with a soft, noisy seam
-			const wob = noise2D(0.5, py * 0.06) * 3;
-			const t = THREE.MathUtils.clamp((px + wob + 5) / 10, 0, 1);
-			c.copy(bullSoil).lerp(bearSoil, t);
-			// hand-painted patches + mow stripes
-			const patch = noise2D(px * 0.1, py * 0.1) * 0.5 + 0.5;
-			c.multiplyScalar(0.85 + patch * 0.3);
-			if (Math.floor(px / 6) % 2 === 0) c.multiplyScalar(1.022);
-			// MARKET-CAP GRIDLINES: gold ticks every 8 units — the terrain IS the mcap axis
-			const nearGrid = Math.abs(px - Math.round(px / 8) * 8);
-			const gx = Math.round(px / 8) * 8;
-			if (nearGrid < 0.24 && Math.abs(gx) <= 48) c.lerp(grid, gx === 0 ? 0.5 : 0.26);
-			// horizontal ROAD across the whole map
+			c.copy(grass);
+			// subtle team-earth influence, neutral at centre, strongest toward the bases
+			const side = THREE.MathUtils.clamp(px / (CAP * 0.8), -1, 1);
+			tint.copy(side < 0 ? bullEarth : bearEarth);
+			c.lerp(tint, Math.pow(Math.abs(side), 1.6) * 0.55);
+			// organic tonal patches
+			const patch = noise2D(px * 0.09, py * 0.09) * 0.5 + 0.5;
+			c.multiplyScalar(0.82 + patch * 0.26);
+			// trampled churned-mud scar down the middle where the armies grind
+			const band = 1 - THREE.MathUtils.clamp(Math.abs(px) / 20, 0, 1);
+			c.lerp(mud, THREE.MathUtils.clamp(band * (0.4 + noise2D(px * 0.22, py * 0.22) * 0.22), 0, 0.75));
+			// the old road, now a faint worn track rather than painted asphalt
 			const roadDist = Math.abs(py - ROAD_Z);
-			if (roadDist < 2.1) {
-				c.lerp(asphalt, THREE.MathUtils.clamp(1 - (roadDist - 1.4) / 0.7, 0, 1));
-				// centre dashes
-				if (roadDist < 0.22 && ((px % 7) + 7) % 7 < 3) c.copy(dash);
-			}
+			if (roadDist < 2.2) c.lerp(roadCol, THREE.MathUtils.clamp(1 - (roadDist - 1.3) / 0.9, 0, 0.7));
 			colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
 		}
 		this.terrainH = (x, z) => {
@@ -623,9 +630,9 @@ export class Battle {
 			const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
 			this.mcapTicks.push({ gx, canvas: c, tex });
 			this.drawTick(gx, null);
-			const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.85, depthWrite: false }));
-			sp.scale.set(9.6, 2.8, 1);
-			sp.position.set(gx, 1.6, -ARENA_Z - 7);
+			const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.5, depthWrite: false }));
+			sp.scale.set(8.4, 2.4, 1);
+			sp.position.set(gx, 1.3, -ARENA_Z - 7);
 			this.scene.add(sp);
 			// mirrored on the near edge for reads from every camera angle
 			const sp2 = sp.clone();
@@ -1737,15 +1744,20 @@ export class Battle {
 	}
 
 	private frameIsBlownOut(): boolean {
+		// The real failure is an ENTIRELY white buffer (broken float target / NaN pass).
+		// Sample a dense grid and only trip if almost everything is white — a dark night
+		// scene with a bright HUD pill and bloomed highlights must never be mistaken for it.
 		const gl = this.renderer.getContext();
 		const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
 		if (!w || !h) return false;
 		const px = new Uint8Array(4);
-		for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.35], [0.75, 0.35], [0.3, 0.75], [0.7, 0.75]] as const) {
-			gl.readPixels((w * fx) | 0, (h * fy) | 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-			if (px[0] < 250 || px[1] < 250 || px[2] < 250) return false; // any normal pixel → frame is fine
+		let white = 0, n = 0;
+		for (let gy = 1; gy <= 4; gy++) for (let gx = 1; gx <= 5; gx++) {
+			n++;
+			gl.readPixels(((w * gx) / 6) | 0, ((h * gy) / 5) | 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+			if (px[0] >= 250 && px[1] >= 250 && px[2] >= 250) white++;
 		}
-		return true;
+		return white >= n - 1; // essentially the whole frame is white
 	}
 
 	private disableFx() {

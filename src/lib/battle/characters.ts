@@ -65,7 +65,10 @@ const DONORS: Record<string, { from: string; node: string }> = {
 	axe: { from: 'barb', node: '2H_Axe' }
 };
 
-const TINT: Record<Team, number> = { bull: 0x2fe07a, bear: 0xff5560 };
+// not team-candy — a whisper of warmth on the living host and cold moonlight on the
+// undead, so bulls read alive and bears read dead. Team is obvious from the models
+// (armoured humans vs bone skeletons) and the coloured castles; the glow just sets mood.
+const TINT: Record<Team, number> = { bull: 0x6a8f4a, bear: 0x5a6a86 };
 const ONESHOT: CharState[] = ['spawn', 'attack', 'death'];
 
 type Inst = {
@@ -97,7 +100,7 @@ export class CharacterPool {
 			const bear = k.startsWith('skel');
 			this.templates[k].scene.traverse((o) => {
 				const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-				if (m && !Array.isArray(m) && 'emissive' in m) { m.emissive = new THREE.Color(TINT[bear ? 'bear' : 'bull']); m.emissiveIntensity = 0.055; }
+				if (m && !Array.isArray(m) && 'emissive' in m) { m.emissive = new THREE.Color(TINT[bear ? 'bear' : 'bull']); m.emissiveIntensity = bear ? 0.06 : 0.045; }
 			});
 		}
 		// lift the weapon meshes out of the Adventurers to arm the skeletons
