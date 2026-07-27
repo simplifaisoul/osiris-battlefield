@@ -157,11 +157,49 @@ function buildArrowGeo(): THREE.BufferGeometry {
 // ---------- environment textures ----------
 
 function groundTexture(): THREE.Texture {
-	const c = document.createElement('canvas'); c.width = c.height = 512;
+	const S = 512;
+	const c = document.createElement('canvas'); c.width = c.height = S;
 	const x = c.getContext('2d')!;
-	x.fillStyle = '#b0a996'; x.fillRect(0, 0, 512, 512);
-	for (let i = 0; i < 18000; i++) { const v = 165 + Math.random() * 80; x.fillStyle = `rgba(${v},${v - 6},${v - 20},${Math.random() * 0.4})`; x.fillRect(Math.random() * 512, Math.random() * 512, 2, 2); }
-	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
+	x.fillStyle = '#a59d88'; x.fillRect(0, 0, S, S);
+	// broad tonal patches (dirt worn through grass) so the surface isn't a flat wash
+	for (let i = 0; i < 90; i++) {
+		const px = Math.random() * S, py = Math.random() * S, r = 20 + Math.random() * 70;
+		const dark = Math.random() < 0.5;
+		const g = x.createRadialGradient(px, py, 0, px, py, r);
+		g.addColorStop(0, dark ? 'rgba(70,60,44,0.5)' : 'rgba(190,182,158,0.4)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+		x.fillStyle = g; x.fillRect(px - r, py - r, r * 2, r * 2);
+	}
+	// grass-blade streaks for directional detail
+	for (let i = 0; i < 2600; i++) {
+		const px = Math.random() * S, py = Math.random() * S, len = 2 + Math.random() * 5, a = -1.2 + Math.random() * 0.5;
+		const v = 120 + Math.random() * 90; x.strokeStyle = `rgba(${v * 0.8 | 0},${v | 0},${v * 0.6 | 0},${0.12 + Math.random() * 0.2})`; x.lineWidth = 0.8;
+		x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.cos(a) * len, py + Math.sin(a) * len); x.stroke();
+	}
+	// fine grit
+	for (let i = 0; i < 14000; i++) { const v = 150 + Math.random() * 90; x.fillStyle = `rgba(${v},${v - 6},${v - 22},${Math.random() * 0.35})`; x.fillRect(Math.random() * S, Math.random() * S, 1.6, 1.6); }
+	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(7, 4); t.anisotropy = 4; return t;
+}
+// a procedural tangent-space normal map baked from multi-octave noise, so the ground
+// catches the moonlight with real surface relief instead of reading as a flat plane.
+function groundNormalTexture(): THREE.Texture {
+	const S = 256;
+	const c = document.createElement('canvas'); c.width = c.height = S;
+	const x = c.getContext('2d')!;
+	const n = createNoise2D(() => 0.71);
+	const h = (i: number, j: number) => n(i * 0.05, j * 0.05) * 1 + n(i * 0.13, j * 0.13) * 0.5 + n(i * 0.31, j * 0.31) * 0.22;
+	const img = x.createImageData(S, S);
+	for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+		const dx = (h(i - 1, j) - h(i + 1, j)) * 1.6;
+		const dy = (h(i, j - 1) - h(i, j + 1)) * 1.6;
+		const len = Math.hypot(dx, dy, 1);
+		const k = (j * S + i) * 4;
+		img.data[k] = (dx / len * 0.5 + 0.5) * 255;
+		img.data[k + 1] = (dy / len * 0.5 + 0.5) * 255;
+		img.data[k + 2] = (1 / len * 0.5 + 0.5) * 255;
+		img.data[k + 3] = 255;
+	}
+	x.putImageData(img, 0, 0);
+	const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(14, 9); t.colorSpace = THREE.NoColorSpace; return t;
 }
 function skyTexture(): THREE.Texture {
 	// a deep cinematic night: layered blue-violet void, a drifting nebula band, dense
@@ -470,7 +508,7 @@ export class Battle {
 
 	private buildGround() {
 		const tex = groundTexture();
-		const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: tex, vertexColors: true, roughness: 0.98, metalness: 0.0 });
+		const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: tex, normalMap: groundNormalTexture(), normalScale: new THREE.Vector2(0.55, 0.55), vertexColors: true, roughness: 0.98, metalness: 0.0 });
 		const geo = new THREE.PlaneGeometry(BOARD_W, BOARD_D, 210, 160);
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -533,7 +571,7 @@ export class Battle {
 		// (additive ground decal) that pools real-looking firelight without the per-fragment
 		// cost of a dozen point lights across 150+ characters.
 		const poolTex = radialTexture('rgba(255,150,60,0.85)');
-		const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false });
+		const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false });
 		this.firePoolMat = poolMat;
 		const torchAt = (x: number, z: number) => {
 			const y = this.terrainH(x, z);
@@ -948,7 +986,7 @@ export class Battle {
 		}
 		(this.embers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
 		// torches breathe — a shared subtle flicker across every firelight pool
-		if (this.firePoolMat) this.firePoolMat.opacity = 0.3 + Math.sin(this.time * 6) * 0.05 + Math.sin(this.time * 11 + 1) * 0.03;
+		if (this.firePoolMat) this.firePoolMat.opacity = 0.2 + Math.sin(this.time * 6) * 0.04 + Math.sin(this.time * 11 + 1) * 0.025;
 	}
 
 	// low battlefield mist: broad, cool, slow-drifting motes that pool in the fighting
