@@ -388,7 +388,7 @@ export class Battle {
 		moon.position.set(-40, 66, 30); moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
 		const s = 100; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 220; moon.shadow.bias = -0.0004;
 		this.scene.add(moon);
-		const fill = new THREE.DirectionalLight(0xffb060, 0.45);
+		const fill = new THREE.DirectionalLight(0xffb060, 0.6);
 		fill.position.set(30, 20, 40); this.scene.add(fill);
 		const rim = new THREE.DirectionalLight(0xff5a4a, 0.95);
 		rim.position.set(38, 30, -46);
@@ -509,11 +509,11 @@ export class Battle {
 
 	private buildSiege() {
 		// a pool of hot boulders that arc over the whole field
-		const rockGeo = new THREE.IcosahedronGeometry(0.9, 0);
-		const glowGeo = new THREE.SphereGeometry(1.7, 8, 8);
+		const rockGeo = new THREE.IcosahedronGeometry(0.85, 1); // one subdivision = a rounder, rockier lump
+		const glowGeo = new THREE.SphereGeometry(1.35, 8, 8);
 		for (let i = 0; i < 16; i++) {
-			const mesh = new THREE.Mesh(rockGeo, new THREE.MeshStandardMaterial({ color: 0x2a1c14, emissive: new THREE.Color(0xff5a1e), emissiveIntensity: 1.5, roughness: 1, metalness: 0 }));
-			const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
+			const mesh = new THREE.Mesh(rockGeo, new THREE.MeshStandardMaterial({ color: 0x1c130d, emissive: new THREE.Color(0xff5320), emissiveIntensity: 0.95, roughness: 1, metalness: 0 }));
+			const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xff6a26, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
 			mesh.add(glow); mesh.visible = false; mesh.frustumCulled = false;
 			this.scene.add(mesh);
 			this.boulders.push({ mesh, active: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, t: 0, team: 'bull', spin: Math.random() * 6 });
@@ -1150,10 +1150,10 @@ export class Battle {
 	// ---------- particles ----------
 
 	private spawnBurst(x: number, y: number, z: number, color: THREE.Color, n: number) {
-		for (let k = 0; k < n; k++) { const i = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N; this.sparkPos[i * 3] = x; this.sparkPos[i * 3 + 1] = y; this.sparkPos[i * 3 + 2] = z; this.sparkVel[i * 3] = (Math.random() - 0.5) * 9; this.sparkVel[i * 3 + 1] = 2 + Math.random() * 8; this.sparkVel[i * 3 + 2] = (Math.random() - 0.5) * 9; this.sparkLife[i] = 0.5 + Math.random() * 0.5; this.sparkColor[i * 3] = color.r; this.sparkColor[i * 3 + 1] = color.g; this.sparkColor[i * 3 + 2] = color.b; }
+		for (let k = 0; k < n; k++) { const i = this.sparkHead; this.sparkHead = (this.sparkHead + 1) % this.SPARK_N; this.sparkPos[i * 3] = x; this.sparkPos[i * 3 + 1] = y; this.sparkPos[i * 3 + 2] = z; this.sparkVel[i * 3] = (Math.random() - 0.5) * 9; this.sparkVel[i * 3 + 1] = 2 + Math.random() * 8; this.sparkVel[i * 3 + 2] = (Math.random() - 0.5) * 9; this.sparkLife[i] = 0.36 + Math.random() * 0.34; this.sparkColor[i * 3] = color.r; this.sparkColor[i * 3 + 1] = color.g; this.sparkColor[i * 3 + 2] = color.b; }
 	}
 	private spawnSoul(x: number, y: number, z: number, color: THREE.Color) {
-		const i = this.soulHead; this.soulHead = (this.soulHead + 1) % this.SOUL_N; this.soulPos[i * 3] = x; this.soulPos[i * 3 + 1] = y; this.soulPos[i * 3 + 2] = z; this.soulVel[i * 3] = (Math.random() - 0.5) * 0.6; this.soulVel[i * 3 + 1] = 2.4 + Math.random() * 1.4; this.soulVel[i * 3 + 2] = (Math.random() - 0.5) * 0.6; this.soulLife[i] = 2.2 + Math.random() * 1.2; const c = color.clone().lerp(new THREE.Color(0xffffff), 0.5); this.soulColor[i * 3] = c.r; this.soulColor[i * 3 + 1] = c.g; this.soulColor[i * 3 + 2] = c.b;
+		const i = this.soulHead; this.soulHead = (this.soulHead + 1) % this.SOUL_N; this.soulPos[i * 3] = x; this.soulPos[i * 3 + 1] = y; this.soulPos[i * 3 + 2] = z; this.soulVel[i * 3] = (Math.random() - 0.5) * 0.6; this.soulVel[i * 3 + 1] = 2.4 + Math.random() * 1.4; this.soulVel[i * 3 + 2] = (Math.random() - 0.5) * 0.6; this.soulLife[i] = 1.5 + Math.random() * 0.9; const c = color.clone().lerp(new THREE.Color(0xffffff), 0.5); this.soulColor[i * 3] = c.r; this.soulColor[i * 3 + 1] = c.g; this.soulColor[i * 3 + 2] = c.b;
 	}
 	private updateParticles(dt: number) {
 		const p = this.sparkPos, v = this.sparkVel, l = this.sparkLife;
@@ -1533,7 +1533,7 @@ export class Battle {
 						if (this.awaitClash) { this.awaitClash = false; this.slowmo = Math.max(this.slowmo, 0.8); this.shake = Math.min(1.4, this.shake + 0.5); }
 						const per = u.dmg * ATK_CD[u.cls] * KILL_TEMPO * this.teamMul(u.team);
 						const col = u.team === 'bull' ? GOLD : CRIMSON;
-						this.spawnBurst(t.x, hillY(t.x) + 1.1, t.z, col, u.cls === 'guardian' ? 12 : 5);
+						this.spawnBurst(t.x, hillY(t.x) + 1.1, t.z, col, u.cls === 'guardian' ? 7 : 3);
 						// knockback
 						const kb = u.cls === 'guardian' ? 0.9 : 0.3;
 						t.x += (dx / Math.max(0.01, dist)) * kb; t.z += (dz / Math.max(0.01, dist)) * kb * 0.4;
@@ -1727,7 +1727,7 @@ export class Battle {
 	private kill(u: Unit, killers: Unit[]) {
 		if (u.dying > 0) return; // already down — never double-count a casualty
 		u.dying = 3; // play the death animation, sink, then retire the character
-		this.spawnBurst(u.x, hillY(u.x) + 1.2, u.z, u.team === 'bull' ? GOLD : CRIMSON, u.legend ? 40 : 9);
+		this.spawnBurst(u.x, hillY(u.x) + 1.2, u.z, u.team === 'bull' ? GOLD : CRIMSON, u.legend ? 34 : 6);
 		this.spawnSoul(u.x, hillY(u.x) + 1.6, u.z, u.team === 'bull' ? GOLD : CRIMSON);
 		this.addDecal(u.x, u.z, u.scale);
 		if (u.team === 'bull') this.casualtiesBull++; else this.casualtiesBear++;

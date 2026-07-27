@@ -307,17 +307,18 @@
 			<div class="intro-tag mono">$OSIRIS · BUYS vs SELLS · LIVE ON-CHAIN WARFARE</div>
 			<div class="intro-chips mono">
 				<span class="ichip"><i class="live-dot"></i> LIVE ORDER FLOW</span>
-				<span class="ichip">𓅃 WHALE SKY STRIKES</span>
+				<span class="ichip">𓅃 FALCON SKY STRIKES</span>
 				<span class="ichip">⛨ WAR CHARIOTS</span>
-				<span class="ichip">𓅃 FALCON STRIKES</span>
+				<span class="ichip">𓅃 CATAPULT SIEGE</span>
 			</div>
 			<p class="intro-lore">
 				Every <span class="green">buy</span> deploys a soldier for the <span class="green">bulls</span>;
 				every <span class="red">sell</span> reinforces the <span class="red">bears</span>.
-				Bigger orders field mightier warriors — spearmen hold the line, twin-khopesh duelists
-				dance through the melee, archers rain bronze, champions ride
-				<span class="green">war chariots</span> through the ranks, and whales awaken beast-headed
-				<span class="green">guardians</span> of the Duat. The price drives the front. The war never stops.
+				Bigger orders field mightier warriors — spearmen hold the line, twin-blade duelists
+				dance through the melee, archers rain bolts, champions ride
+				<span class="green">war chariots</span>, and the biggest whales field towering
+				<span class="green">titans</span>. Catapults hurl fire from the rear, and the market cap
+					itself drives the front line. The war never stops.
 			</p>
 			<button class="enter-btn" onclick={enter} disabled={!ready}><span>{ready ? 'ENTER THE BATTLEFIELD' : 'MUSTERING THE ARMIES…'}</span></button>
 			<div class="intro-hint mono">W A S D PAN · SCROLL ZOOM · DRAG ORBIT · SOUND ON</div>

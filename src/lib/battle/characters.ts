@@ -111,13 +111,16 @@ const DONORS: Record<string, { from: string; node: string }> = {
 // the living, cold moonlight on the undead. The per-instance colour skin rides on top.
 const TINT: Record<Team, number> = { bull: 0x6a8f4a, bear: 0x5a6a86 };
 
-// per-fighter colour skins (multiplied over the model's own texture). Gentle enough
-// to read as dyed cloth / weathered steel, not neon — a varied host, not a rainbow.
+// per-fighter colour skins, multiplied over the model's own texture. Kept LIGHT and
+// muted (never saturated) so they read as dyed cloth and weathered steel — a coherent
+// host with subtle variation, not a clown rainbow. Each palette stays inside its
+// team's identity so bulls always read as a warm living host and bears as a cold
+// undead one, even in the thick of the melee.
 const SKINS: Record<Team, number[]> = {
-	// living host: steel, crimson, azure, forest, bronze, royal, pale
-	bull: [0xffffff, 0xf2a0a0, 0xa6bcf0, 0xa8dca0, 0xf0cf8a, 0xc4a8ee, 0xdfe3ea],
-	// undead: bleached bone, moss, dried-blood rust, frost, grave-violet, verdigris
-	bear: [0xe2e6ee, 0xb6c6b2, 0xceac9e, 0xacbcd2, 0xccc2d6, 0xa6b8ac]
+	// the living: burnished steel, warm leather, field olive, bronze, muted blue, worn brown
+	bull: [0xffffff, 0xe9d7bd, 0xc9d6b2, 0xdcc59e, 0xb9c6d2, 0xd6c1ac],
+	// the undead: bleached bone, ashen grey-green, weathered bone, cold steel, grave grey-violet
+	bear: [0xe7ebf1, 0xccd6cc, 0xd9cabf, 0xc3ccd9, 0xcfc5cd]
 };
 
 const ONESHOT: CharState[] = ['spawn', 'attack', 'death'];
@@ -152,7 +155,7 @@ export class CharacterPool {
 			const bear = k.startsWith('skel');
 			this.templates[k].scene.traverse((o) => {
 				const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-				if (m && !Array.isArray(m) && 'emissive' in m) { m.emissive = new THREE.Color(TINT[bear ? 'bear' : 'bull']); m.emissiveIntensity = bear ? 0.06 : 0.045; }
+				if (m && !Array.isArray(m) && 'emissive' in m) { m.emissive = new THREE.Color(TINT[bear ? 'bear' : 'bull']); m.emissiveIntensity = bear ? 0.08 : 0.06; }
 			});
 		}
 		// lift the weapon meshes out of the Adventurers to arm the skeletons
