@@ -342,6 +342,7 @@ export class Battle {
 		this.buildSouls();
 		this.buildSmoke();
 		this.buildEmbers();
+		this.buildMist();
 		this.buildStandards();
 		this.buildUnitShadows();
 		this.buildDecals();
@@ -528,6 +529,12 @@ export class Battle {
 		// crates are real CC0 models placed by the Scenery loader once it streams in.
 		const poles: THREE.BufferGeometry[] = [];
 		const flames: THREE.BufferGeometry[] = [];
+		// warm firelight pools cast on the ground under each torch — a cheap fake light
+		// (additive ground decal) that pools real-looking firelight without the per-fragment
+		// cost of a dozen point lights across 150+ characters.
+		const poolTex = radialTexture('rgba(255,150,60,0.85)');
+		const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false });
+		this.firePoolMat = poolMat;
 		const torchAt = (x: number, z: number) => {
 			const y = this.terrainH(x, z);
 			const pole = paint(new THREE.CylinderGeometry(0.09, 0.13, 2.6, 5), '#2e2318'); pole.translate(x, y + 1.3, z);
@@ -536,6 +543,8 @@ export class Battle {
 			const fl = paint(new THREE.ConeGeometry(0.22, 0.62, 6), '#ffb14a'); fl.translate(x, y + 3.1, z);
 			const core = paint(new THREE.SphereGeometry(0.12, 6, 5), '#ffe6a0'); core.translate(x, y + 2.92, z);
 			flames.push(fl, core);
+			const pool = new THREE.Mesh(new THREE.PlaneGeometry(9, 9), poolMat);
+			pool.rotation.x = -Math.PI / 2; pool.position.set(x, y + 0.14, z); pool.renderOrder = 1; this.scene.add(pool);
 		};
 		for (let tx = -96; tx <= 96; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
 		for (const cx of [-CAP, CAP]) for (const [dx, dz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]] as const) torchAt(cx + dx, dz);
@@ -902,6 +911,8 @@ export class Battle {
 	}
 	// ambient war-embers: faint gold motes drifting up off the field all night long
 	private embers!: THREE.Points; private emberPos!: Float32Array; private emberVel!: Float32Array; private emberLife!: Float32Array; private EMBER_N = 150;
+	private firePoolMat!: THREE.MeshBasicMaterial;
+	private mist!: THREE.Points; private mistPos!: Float32Array; private MIST_N = 46;
 	private buildEmbers() {
 		const N = this.EMBER_N;
 		this.emberPos = new Float32Array(N * 3); this.emberVel = new Float32Array(N * 3); this.emberLife = new Float32Array(N);
@@ -936,6 +947,23 @@ export class Battle {
 			p[i * 3 + 2] += v[i * 3 + 2] * dt;
 		}
 		(this.embers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+		// torches breathe — a shared subtle flicker across every firelight pool
+		if (this.firePoolMat) this.firePoolMat.opacity = 0.3 + Math.sin(this.time * 6) * 0.05 + Math.sin(this.time * 11 + 1) * 0.03;
+	}
+
+	// low battlefield mist: broad, cool, slow-drifting motes that pool in the fighting
+	// valley and catch the moonlight — atmospheric depth without a heavy fog volume.
+	private buildMist() {
+		const N = this.MIST_N; this.mistPos = new Float32Array(N * 3);
+		for (let i = 0; i < N; i++) { this.mistPos[i * 3] = (Math.random() - 0.5) * 160; this.mistPos[i * 3 + 1] = 0.6 + Math.random() * 3.4; this.mistPos[i * 3 + 2] = (Math.random() - 0.5) * ARENA_Z * 2.2; }
+		const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(this.mistPos, 3));
+		this.mist = new THREE.Points(g, new THREE.PointsMaterial({ map: radialTexture('rgba(150,170,210,0.5)'), size: 22, color: 0x8896b4, transparent: true, opacity: 0.05, depthWrite: false, blending: THREE.AdditiveBlending }));
+		this.mist.frustumCulled = false; this.scene.add(this.mist);
+	}
+	private updateMist(dt: number) {
+		const p = this.mistPos;
+		for (let i = 0; i < this.MIST_N; i++) { p[i * 3] += (Math.sin(this.time * 0.15 + i) * 0.5 + 0.3) * dt; if (p[i * 3] > 84) p[i * 3] -= 168; }
+		(this.mist.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
 	}
 
 	private smoke!: THREE.Points; private smokePos!: Float32Array; private smokeVel!: Float32Array; private smokeLife!: Float32Array; private smokeMax!: Float32Array; private smokeColor!: Float32Array; private smokeHead = 0; private SMOKE_N = 240;
@@ -1390,6 +1418,7 @@ export class Battle {
 		this.updateLights(simDt);
 		this.updateParticles(simDt);
 		this.updateEmbers(simDt);
+		this.updateMist(simDt);
 		this.updateDecals(simDt);
 		this.render(dt);
 
