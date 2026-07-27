@@ -468,12 +468,12 @@ export class Battle {
 		moon.position.set(-46, 74, 34); moon.castShadow = true; moon.shadow.mapSize.set(2048, 2048);
 		const s = 120; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 260; moon.shadow.bias = -0.0004; moon.shadow.normalBias = 0.03;
 		this.scene.add(moon);
-		const fill = new THREE.DirectionalLight(0xf3caa0, 0.36);
+		const fill = new THREE.DirectionalLight(0xc4cedd, 0.34);
 		fill.position.set(30, 20, 40); this.scene.add(fill);
-		// blood rim kept low and high so it grazes the backs of the host for menace
-		// without the PBR ground catching it as a red wash across the field
-		const rim = new THREE.DirectionalLight(0xff6a54, 0.18);
-		rim.position.set(40, 52, -50);
+		// a whisper of blood rim from high behind — enough to edge-light the host, too
+		// faint for the normal-mapped ground to catch it as an orange wash on one flank
+		const rim = new THREE.DirectionalLight(0xff6a54, 0.06);
+		rim.position.set(40, 60, -50);
 		this.scene.add(rim);
 
 		// dynamic combat lights: a fixed pool, all added now at intensity 0 so
@@ -508,7 +508,7 @@ export class Battle {
 
 	private buildGround() {
 		const tex = groundTexture();
-		const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: tex, normalMap: groundNormalTexture(), normalScale: new THREE.Vector2(0.55, 0.55), vertexColors: true, roughness: 0.98, metalness: 0.0 });
+		const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: tex, normalMap: groundNormalTexture(), normalScale: new THREE.Vector2(0.42, 0.42), vertexColors: true, roughness: 0.98, metalness: 0.0 });
 		const geo = new THREE.PlaneGeometry(BOARD_W, BOARD_D, 210, 160);
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -581,7 +581,7 @@ export class Battle {
 			const fl = paint(new THREE.ConeGeometry(0.22, 0.62, 6), '#ffb14a'); fl.translate(x, y + 3.1, z);
 			const core = paint(new THREE.SphereGeometry(0.12, 6, 5), '#ffe6a0'); core.translate(x, y + 2.92, z);
 			flames.push(fl, core);
-			const pool = new THREE.Mesh(new THREE.PlaneGeometry(9, 9), poolMat);
+			const pool = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 6.5), poolMat);
 			pool.rotation.x = -Math.PI / 2; pool.position.set(x, y + 0.14, z); pool.renderOrder = 1; this.scene.add(pool);
 		};
 		for (let tx = -96; tx <= 96; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
@@ -986,7 +986,7 @@ export class Battle {
 		}
 		(this.embers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
 		// torches breathe — a shared subtle flicker across every firelight pool
-		if (this.firePoolMat) this.firePoolMat.opacity = 0.2 + Math.sin(this.time * 6) * 0.04 + Math.sin(this.time * 11 + 1) * 0.025;
+		if (this.firePoolMat) this.firePoolMat.opacity = 0.13 + Math.sin(this.time * 6) * 0.03 + Math.sin(this.time * 11 + 1) * 0.02;
 	}
 
 	// low battlefield mist: broad, cool, slow-drifting motes that pool in the fighting

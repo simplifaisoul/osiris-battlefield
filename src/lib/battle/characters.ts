@@ -167,7 +167,7 @@ export class CharacterPool {
 				const clone = (node as THREE.Object3D).clone();
 				clone.visible = true;
 				// neutral material on borrowed steel so a tinted blade doesn't ride a skeleton
-				clone.traverse((o) => { const mesh = o as THREE.Mesh; if (mesh.isMesh) { const src = mesh.material as THREE.MeshStandardMaterial; const nm = src.clone(); nm.emissive = new THREE.Color(0x000000); mesh.material = nm; } });
+				clone.traverse((o) => { const mesh = o as THREE.Mesh; if (mesh.isMesh) { const src = mesh.material as THREE.MeshStandardMaterial; const nm = src.clone(); nm.emissive = new THREE.Color(0x000000); nm.metalness = 0.7; nm.roughness = 0.4; nm.envMapIntensity = 1.6; mesh.material = nm; } });
 				this.donors[key] = clone;
 			}
 		}
@@ -206,6 +206,7 @@ export class CharacterPool {
 			if (!mat || Array.isArray(mat) || mat.name === 'Glow') return;
 			const nm = mat.clone();
 			nm.color = (mat.color ? mat.color.clone() : new THREE.Color(0xffffff)).multiply(tint);
+			nm.envMapIntensity = 1.35; // armour and cloth catch the moonlit night ambient
 			mesh.material = nm;
 		});
 		return skin;
