@@ -69,15 +69,19 @@ const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, 
 const KILL_TEMPO = 2.1; // global lethality multiplier (per-hit = dmg * cd * tempo) — fights bite
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
-const FRONT_MAX = 50;
-const CAP = FRONT_MAX + 19;
-// the fighting band is deliberately tight: a compact front makes ~60 real
-// characters a side read as a massed army instead of a scattered skirmish line
-const ARENA_Z = 28;
+const FRONT_MAX = 60;
+const CAP = FRONT_MAX + 22;
+// the price ladder is scaled: one world unit == PCT_PER_UNIT percent of price move
+// from the campaign anchor. This decouples the physical size of the field from the
+// price range, so the war can be fought over a big battlefield while a gate still
+// falls at a sane move (~±FRONT_MAX*0.9*PCT_PER_UNIT ≈ ±46%).
+const PCT_PER_UNIT = 0.85;
+// the fighting band runs deep so a big host reads as a massed army with real depth
+const ARENA_Z = 38;
 // the battlefield is a bounded board floating in a dark void
-const BOARD_W = 200;
-const BOARD_D = 150;
-const ROAD_Z = 9; // horizontal road across the map
+const BOARD_W = 260;
+const BOARD_D = 210;
+const ROAD_Z = 11; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 8; // deliberate marching pace — the charge multiplier provides the sprint
 const UNIT_SCALE = 2.35;
@@ -271,7 +275,7 @@ export class Battle {
 	private scenery = new Scenery();
 	// units over this many alive per side stop mustering reinforcements; real trades
 	// always deploy. Keeps the field a readable clash of pro characters, not a mob.
-	private SIDE_CAP = 70;
+	private SIDE_CAP = 100;
 
 	// the intro must not release the player into an empty field while ~20MB of
 	// character models are still streaming in
@@ -491,7 +495,7 @@ export class Battle {
 			const core = paint(new THREE.SphereGeometry(0.12, 6, 5), '#ffe6a0'); core.translate(x, y + 2.92, z);
 			flames.push(fl, core);
 		};
-		for (let tx = -72; tx <= 72; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
+		for (let tx = -96; tx <= 96; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
 		for (const cx of [-CAP, CAP]) for (const [dx, dz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]] as const) torchAt(cx + dx, dz);
 		const pm = mergeGeometries(poles, false)!; pm.computeVertexNormals();
 		this.scene.add(new THREE.Mesh(pm, toonMaterial()));
@@ -505,7 +509,7 @@ export class Battle {
 		const onRoad = (z: number) => Math.abs(z - ROAD_Z) < 4;
 		type P = { x: number; z: number; y?: number; s: number; r: number };
 		const trees: P[] = [], rocksA: P[] = [], rocksB: P[] = [];
-		for (let i = 0; i < 150; i++) {
+		for (let i = 0; i < 260; i++) {
 			const x = rng(-BOARD_W / 2 + 12, BOARD_W / 2 - 12);
 			const z = rng(-BOARD_D / 2 + 10, BOARD_D / 2 - 10);
 			if (onRoad(z)) continue;
@@ -514,8 +518,8 @@ export class Battle {
 			(Math.random() < 0.7 ? trees : rocksA).push({ x, z, y: this.terrainH(x, z), s: rng(2.6, 4.4), r: rng(0, Math.PI * 2) });
 		}
 		// a scattering of small stones across the arena floor for lived-in texture
-		for (let i = 0; i < 40; i++) {
-			const x = rng(-56, 56), z = rng(-ARENA_Z + 3, ARENA_Z - 3);
+		for (let i = 0; i < 66; i++) {
+			const x = rng(-72, 72), z = rng(-ARENA_Z + 3, ARENA_Z - 3);
 			if (onRoad(z)) continue;
 			rocksB.push({ x, z, y: this.terrainH(x, z), s: rng(1.4, 2.6), r: rng(0, Math.PI * 2) });
 		}
@@ -649,13 +653,14 @@ export class Battle {
 		x.clearRect(0, 0, 192, 56);
 		x.textAlign = 'center'; x.textBaseline = 'middle';
 		const col = gx > 0 ? 'rgba(122,255,176,0.95)' : 'rgba(255,138,149,0.95)';
+		const pct = Math.round(gx * PCT_PER_UNIT); // ladder is scaled: world x -> % move
 		x.font = '700 15px "JetBrains Mono", monospace';
 		x.fillStyle = 'rgba(255,255,255,0.4)';
-		x.fillText(`${gx > 0 ? '+' : ''}${gx}%`, 96, 10);
+		x.fillText(`${pct > 0 ? '+' : ''}${pct}%`, 96, 10);
 		x.font = '800 27px "JetBrains Mono", monospace';
 		x.fillStyle = col;
 		x.shadowColor = 'rgba(0,0,0,0.9)'; x.shadowBlur = 6;
-		x.fillText(mcap ? fmtUsdShort(mcap * (1 + gx / 100)) : '····', 96, 34);
+		x.fillText(mcap ? fmtUsdShort(mcap * (1 + gx * PCT_PER_UNIT / 100)) : '····', 96, 34);
 		x.shadowBlur = 0;
 		t.tex.needsUpdate = true;
 	}
@@ -1278,7 +1283,7 @@ export class Battle {
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
 			const pricePct = this.lastLadderMcap > 0 ? (this.liveMcap / this.lastLadderMcap - 1) * 100 : 0;
-			const priceTarget = THREE.MathUtils.clamp(pricePct, -FRONT_MAX, FRONT_MAX);
+			const priceTarget = THREE.MathUtils.clamp(pricePct / PCT_PER_UNIT, -FRONT_MAX, FRONT_MAX);
 			// war intensity climbs the longer a campaign runs — it musters bloodier
 			// reinforcements (below); it does NOT move the line off the cap
 			this.sudden = THREE.MathUtils.clamp((this.warClock - 300) / 240, 0, 1);
@@ -1307,10 +1312,10 @@ export class Battle {
 			const FLOOR = 0.32;
 			this.accB += Math.max(this.reinB, FLOOR) * (1 + tilt) * heat * dt;
 			this.accS += Math.max(this.reinS, FLOOR) * (1 - tilt) * heat * dt;
-			// hard rubber-band: a broken host rallies fresh war bands fast, so the
-			// clash at the line never dwindles to one side milling over a wiped enemy
-			if (bullCount < 30) this.accB += dt * (30 - bullCount) * 0.16;
-			if (bearCount < 30) this.accS += dt * (30 - bearCount) * 0.16;
+			// hard rubber-band: hold each host near a big fighting strength so the clash
+			// at the line stays a massed war, and a broken side rallies fresh bands fast
+			if (bullCount < 62) this.accB += dt * (62 - bullCount) * 0.2;
+			if (bearCount < 62) this.accS += dt * (62 - bearCount) * 0.2;
 			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false, true); }
 			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false, true); }
 		}
