@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
 	EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, VignetteEffect,
-	ToneMappingEffect, ToneMappingMode
+	ToneMappingEffect, ToneMappingMode, HueSaturationEffect, TiltShiftEffect
 } from 'postprocessing';
 import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
@@ -122,13 +122,13 @@ function pickClass(tier: string, seed: number): Cls {
 	return 'archer';
 }
 
-// ---------- toon look ----------
+// ---------- world look ----------
 
-function toonMaterial(): THREE.MeshToonMaterial {
-	const steps = new Uint8Array([70, 135, 200, 255]);
-	const grad = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
-	grad.minFilter = THREE.NearestFilter; grad.magFilter = THREE.NearestFilter; grad.needsUpdate = true;
-	return new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: grad });
+// solid world geometry (props, siege engines, standards, poles) is physically shaded
+// now — it picks up the moon key, the warm fill and the image-based night ambient, so
+// wood and iron read as real materials instead of flat toon fills.
+function worldMat(): THREE.MeshStandardMaterial {
+	return new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.12 });
 }
 
 type Palette = { cloth: string; clothDark: string; skin: string; metal: string; wood: string; leather: string; accent: string };
@@ -164,29 +164,49 @@ function groundTexture(): THREE.Texture {
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 3); t.anisotropy = 4; return t;
 }
 function skyTexture(): THREE.Texture {
-	// a black-metal night: violet-black void, dense stars, a pale blood moon
-	const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+	// a deep cinematic night: layered blue-violet void, a drifting nebula band, dense
+	// multi-size stars and a luminous moon wrapped in atmospheric haze.
+	const c = document.createElement('canvas'); c.width = 1024; c.height = 1024;
 	const x = c.getContext('2d')!;
-	const g = x.createLinearGradient(0, 0, 0, 512);
-	g.addColorStop(0, '#050309'); g.addColorStop(0.5, '#0a0510'); g.addColorStop(0.82, '#140911'); g.addColorStop(1, '#1a0c10');
-	x.fillStyle = g; x.fillRect(0, 0, 512, 512);
-	for (let i = 0; i < 340; i++) {
-		const sx = Math.random() * 512, sy = Math.pow(Math.random(), 1.5) * 360;
-		x.fillStyle = `rgba(210,205,255,${0.07 + Math.random() * 0.42})`;
-		x.beginPath(); x.arc(sx, sy, 0.3 + Math.random() * 1.1, 0, Math.PI * 2); x.fill();
+	const g = x.createLinearGradient(0, 0, 0, 1024);
+	g.addColorStop(0, '#04060f'); g.addColorStop(0.45, '#080a18'); g.addColorStop(0.78, '#0c0a1a'); g.addColorStop(1, '#120a16');
+	x.fillStyle = g; x.fillRect(0, 0, 1024, 1024);
+	// a faint nebula wash for depth (very subtle so it never reads as "space")
+	for (const [nx, ny, nr, col] of [[300, 300, 460, 'rgba(40,60,120,0.10)'], [760, 540, 420, 'rgba(90,45,110,0.08)'], [520, 180, 320, 'rgba(30,80,110,0.07)']] as const) {
+		const ng = x.createRadialGradient(nx, ny, 10, nx, ny, nr); ng.addColorStop(0, col); ng.addColorStop(1, 'rgba(0,0,0,0)');
+		x.fillStyle = ng; x.fillRect(nx - nr, ny - nr, nr * 2, nr * 2);
 	}
-	// the blood moon — a pale disc ringed in dull crimson haze
-	const mx = 396, my = 92;
-	const halo = x.createRadialGradient(mx, my, 8, mx, my, 88);
-	halo.addColorStop(0, 'rgba(255,120,110,0.30)'); halo.addColorStop(0.4, 'rgba(160,50,60,0.12)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
-	x.fillStyle = halo; x.fillRect(mx - 90, my - 90, 180, 180);
-	const disc = x.createRadialGradient(mx - 6, my - 6, 2, mx, my, 26);
-	disc.addColorStop(0, '#ffe9df'); disc.addColorStop(0.75, '#e8b5a4'); disc.addColorStop(1, '#b06a5e');
-	x.fillStyle = disc; x.beginPath(); x.arc(mx, my, 26, 0, Math.PI * 2); x.fill();
-	// faint craters
-	x.fillStyle = 'rgba(140,80,70,0.25)';
-	for (const [cx, cy, cr] of [[388, 84, 5], [404, 100, 4], [392, 102, 3], [408, 82, 2.5]] as const) { x.beginPath(); x.arc(cx, cy, cr, 0, Math.PI * 2); x.fill(); }
+	// stars — three passes of decreasing frequency / increasing size + glow
+	for (let i = 0; i < 900; i++) { const sx = Math.random() * 1024, sy = Math.pow(Math.random(), 1.3) * 760; x.fillStyle = `rgba(200,205,255,${0.05 + Math.random() * 0.3})`; x.fillRect(sx, sy, 1, 1); }
+	for (let i = 0; i < 260; i++) { const sx = Math.random() * 1024, sy = Math.pow(Math.random(), 1.4) * 720; x.fillStyle = `rgba(215,220,255,${0.15 + Math.random() * 0.5})`; x.beginPath(); x.arc(sx, sy, 0.6 + Math.random() * 1.1, 0, Math.PI * 2); x.fill(); }
+	for (let i = 0; i < 34; i++) { const sx = Math.random() * 1024, sy = Math.random() * 620; const r = 1.2 + Math.random() * 1.4; const sg = x.createRadialGradient(sx, sy, 0, sx, sy, r * 4); sg.addColorStop(0, 'rgba(255,255,255,0.95)'); sg.addColorStop(0.3, 'rgba(210,225,255,0.5)'); sg.addColorStop(1, 'rgba(120,160,255,0)'); x.fillStyle = sg; x.fillRect(sx - r * 4, sy - r * 4, r * 8, r * 8); }
+	// the moon — a luminous cool disc in a wide soft halo
+	const mx = 792, my = 190;
+	const halo = x.createRadialGradient(mx, my, 10, mx, my, 230);
+	halo.addColorStop(0, 'rgba(180,205,255,0.34)'); halo.addColorStop(0.35, 'rgba(120,150,230,0.12)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+	x.fillStyle = halo; x.fillRect(mx - 230, my - 230, 460, 460);
+	const disc = x.createRadialGradient(mx - 14, my - 14, 4, mx, my, 52);
+	disc.addColorStop(0, '#ffffff'); disc.addColorStop(0.7, '#dfe6ff'); disc.addColorStop(1, '#aab6d8');
+	x.fillStyle = disc; x.beginPath(); x.arc(mx, my, 52, 0, Math.PI * 2); x.fill();
+	x.fillStyle = 'rgba(120,135,175,0.28)';
+	for (const [cx, cy, cr] of [[778, 172, 10], [810, 206, 8], [784, 210, 6], [816, 166, 5], [800, 188, 4]] as const) { x.beginPath(); x.arc(cx, cy, cr, 0, Math.PI * 2); x.fill(); }
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+// a low-res equirect night dome used for image-based lighting: cool sky above, a warm
+// firelight bounce near the horizon and a bright moon key, so PBR metals catch real light.
+function envEquirect(): THREE.Texture {
+	const c = document.createElement('canvas'); c.width = 512; c.height = 256;
+	const x = c.getContext('2d')!;
+	const g = x.createLinearGradient(0, 0, 0, 256);
+	g.addColorStop(0, '#0c1230'); g.addColorStop(0.5, '#141a30'); g.addColorStop(0.7, '#1a1626'); g.addColorStop(1, '#0a0a12');
+	x.fillStyle = g; x.fillRect(0, 0, 512, 256);
+	const moon = x.createRadialGradient(370, 66, 4, 370, 66, 150);
+	moon.addColorStop(0, 'rgba(210,224,255,0.95)'); moon.addColorStop(0.4, 'rgba(120,150,220,0.28)'); moon.addColorStop(1, 'rgba(0,0,0,0)');
+	x.fillStyle = moon; x.fillRect(220, 0, 300, 216);
+	const fire = x.createRadialGradient(150, 182, 4, 150, 182, 190);
+	fire.addColorStop(0, 'rgba(255,150,70,0.12)'); fire.addColorStop(1, 'rgba(0,0,0,0)');
+	x.fillStyle = fire; x.fillRect(0, 92, 340, 164);
+	const t = new THREE.CanvasTexture(c); t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 function radialTexture(hex: string): THREE.Texture {
 	const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -306,6 +326,7 @@ export class Battle {
 		this.camera.lookAt(0, 3, 0);
 
 		this.buildComposer();
+		this.buildEnvironment();
 		this.buildLights();
 		this.buildGround();
 		this.buildProps();
@@ -371,11 +392,29 @@ export class Battle {
 		// desaturated, filmic look now comes from the scene itself (muted ground +
 		// natural character tints), not a post grade — a colour-grade effect chained
 		// after tone mapping blew the ground out to white, so it is done in-scene.
-		const bloom = new BloomEffect({ intensity: 0.6, luminanceThreshold: 0.7, luminanceSmoothing: 0.28, mipmapBlur: true, radius: 0.72 });
+		// night-tuned bloom (lower threshold so the moon, torches, fires and strikes glow),
+		// a gentle saturation lift for richer colour, ACES tone map, and a deep vignette.
+		const bloom = new BloomEffect({ intensity: 0.8, luminanceThreshold: 0.62, luminanceSmoothing: 0.28, mipmapBlur: true, radius: 0.8 });
+		const grade = new HueSaturationEffect({ saturation: 0.14 });
 		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-		const vignette = new VignetteEffect({ offset: 0.28, darkness: 0.6 });
-		this.composer.addPass(new EffectPass(this.camera, bloom, tone, vignette));
-		this.composer.addPass(new EffectPass(this.camera, new SMAAEffect()));
+		const vignette = new VignetteEffect({ offset: 0.26, darkness: 0.62 });
+		this.composer.addPass(new EffectPass(this.camera, bloom, grade, tone, vignette));
+		// a subtle tilt-shift keeps the eye on the fighting band and gives the field the
+		// premium look of a lit war diorama (kept gentle so units never read as blurry).
+		const tilt = new TiltShiftEffect({ offset: 0.18, rotation: 0, focusArea: 0.82, feather: 0.5, kernelSize: 1 });
+		this.composer.addPass(new EffectPass(this.camera, tilt, new SMAAEffect()));
+	}
+
+	// image-based lighting: a PMREM night dome gives every PBR material a soft, directional
+	// ambient (cool from the sky, warm off the fires) and real reflections on metal/armour.
+	private buildEnvironment() {
+		const pmrem = new THREE.PMREMGenerator(this.renderer);
+		const src = envEquirect();
+		const rt = pmrem.fromEquirectangular(src);
+		this.scene.environment = rt.texture;
+		(this.scene as THREE.Scene & { environmentIntensity?: number }).environmentIntensity = 0.7;
+		src.dispose();
+		pmrem.dispose();
 	}
 
 	private buildLights() {
@@ -383,15 +422,19 @@ export class Battle {
 		// cold moonlight KEY that sculpts every character, a warm low fill to lift the
 		// dark side off pure black, and a blood-red rim for menace. Directional shading
 		// gives the models real volume even without shadow maps.
-		this.scene.add(new THREE.HemisphereLight(0x6d7db0, 0x2a2018, 1.05));
-		const moon = new THREE.DirectionalLight(0xd0ddff, 2.9);
-		moon.position.set(-40, 66, 30); moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
-		const s = 100; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 220; moon.shadow.bias = -0.0004;
+		// the IBL dome now carries the ambient fill, so the hemisphere is dialled back to
+		// keep contrast — the moon KEY does the sculpting and casts the world's shadows.
+		this.scene.add(new THREE.HemisphereLight(0x6d7db0, 0x2a2018, 0.5));
+		const moon = new THREE.DirectionalLight(0xd6e2ff, 3.2);
+		moon.position.set(-46, 74, 34); moon.castShadow = true; moon.shadow.mapSize.set(2048, 2048);
+		const s = 120; moon.shadow.camera.left = -s; moon.shadow.camera.right = s; moon.shadow.camera.top = s; moon.shadow.camera.bottom = -s; moon.shadow.camera.far = 260; moon.shadow.bias = -0.0004; moon.shadow.normalBias = 0.03;
 		this.scene.add(moon);
-		const fill = new THREE.DirectionalLight(0xffb060, 0.6);
+		const fill = new THREE.DirectionalLight(0xf3caa0, 0.36);
 		fill.position.set(30, 20, 40); this.scene.add(fill);
-		const rim = new THREE.DirectionalLight(0xff5a4a, 0.95);
-		rim.position.set(38, 30, -46);
+		// blood rim kept low and high so it grazes the backs of the host for menace
+		// without the PBR ground catching it as a red wash across the field
+		const rim = new THREE.DirectionalLight(0xff6a54, 0.18);
+		rim.position.set(40, 52, -50);
 		this.scene.add(rim);
 
 		// dynamic combat lights: a fixed pool, all added now at intensity 0 so
@@ -425,7 +468,8 @@ export class Battle {
 	}
 
 	private buildGround() {
-		const mat = new THREE.MeshToonMaterial({ map: groundTexture(), vertexColors: true, gradientMap: (toonMaterial() as THREE.MeshToonMaterial).gradientMap });
+		const tex = groundTexture();
+		const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: tex, vertexColors: true, roughness: 0.98, metalness: 0.0 });
 		const geo = new THREE.PlaneGeometry(BOARD_W, BOARD_D, 210, 160);
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -435,8 +479,8 @@ export class Battle {
 		// lane, and only a WHISPER of team-coloured soil out toward each host's castle.
 		const grass = new THREE.Color('#3c4e2d');   // moonlit turf
 		const mud = new THREE.Color('#3a3021');     // churned battle-earth
-		const bullEarth = new THREE.Color('#445831'); // faint cool green near the bull keep
-		const bearEarth = new THREE.Color('#524030'); // faint ashen brown near the bear keep
+		const bullEarth = new THREE.Color('#3c4a2e'); // barely-there cool tint toward the bull keep
+		const bearEarth = new THREE.Color('#43473a'); // barely-there neutral tint toward the bear keep
 		const roadCol = new THREE.Color('#302921');
 		const c = new THREE.Color(), tint = new THREE.Color();
 		for (let i = 0; i < pos.count; i++) {
@@ -449,7 +493,7 @@ export class Battle {
 			// subtle team-earth influence, neutral at centre, strongest toward the bases
 			const side = THREE.MathUtils.clamp(px / (CAP * 0.8), -1, 1);
 			tint.copy(side < 0 ? bullEarth : bearEarth);
-			c.lerp(tint, Math.pow(Math.abs(side), 1.6) * 0.55);
+			c.lerp(tint, Math.pow(Math.abs(side), 1.8) * 0.28);
 			// organic tonal patches
 			const patch = noise2D(px * 0.09, py * 0.09) * 0.5 + 0.5;
 			c.multiplyScalar(0.82 + patch * 0.26);
@@ -496,7 +540,7 @@ export class Battle {
 		for (let tx = -96; tx <= 96; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
 		for (const cx of [-CAP, CAP]) for (const [dx, dz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]] as const) torchAt(cx + dx, dz);
 		const pm = mergeGeometries(poles, false)!; pm.computeVertexNormals();
-		this.scene.add(new THREE.Mesh(pm, toonMaterial()));
+		const poleMesh = new THREE.Mesh(pm, worldMat()); poleMesh.castShadow = true; this.scene.add(poleMesh);
 		const fm = mergeGeometries(flames, false)!;
 		this.scene.add(new THREE.Mesh(fm, new THREE.MeshBasicMaterial({ vertexColors: true }))); // unlit — burns bright at night
 	}
@@ -541,7 +585,7 @@ export class Battle {
 		const axle = paint(new THREE.CylinderGeometry(0.16, 0.16, 3.6, 6), iron); axle.rotateX(Math.PI / 2); axle.translate(1.4, 0.65, 0); statics.push(axle);
 		for (const wz of [-1.6, 1.6]) { const w = paint(new THREE.CylinderGeometry(0.95, 0.95, 0.34, 10), darkWood); w.rotateX(Math.PI / 2); w.translate(1.4, 0.65, wz); statics.push(w); }
 		const sm = mergeGeometries(statics, false)!; sm.computeVertexNormals();
-		grp.add(new THREE.Mesh(sm, toonMaterial()));
+		const frame = new THREE.Mesh(sm, worldMat()); frame.castShadow = true; frame.receiveShadow = true; grp.add(frame);
 		// throwing arm on a pivot at the top of the A-frame
 		const arm = new THREE.Group(); arm.position.set(-0.6, 3.2, 0);
 		const armParts: THREE.BufferGeometry[] = [];
@@ -549,7 +593,7 @@ export class Battle {
 		const cw = paint(new THREE.BoxGeometry(1.1, 1.1, 1.1), iron); cw.translate(-1.5, 0, 0); armParts.push(cw); // counterweight
 		const bucket = paint(new THREE.CylinderGeometry(0.55, 0.36, 0.6, 8), darkWood); bucket.translate(5.1, 0.3, 0); armParts.push(bucket);
 		const am = mergeGeometries(armParts, false)!; am.computeVertexNormals();
-		arm.add(new THREE.Mesh(am, toonMaterial()));
+		const armMesh = new THREE.Mesh(am, worldMat()); armMesh.castShadow = true; arm.add(armMesh);
 		arm.rotation.z = this.COCK;
 		const muzzle = new THREE.Object3D(); muzzle.position.set(5.1, 0.6, 0); arm.add(muzzle);
 		grp.add(arm);
@@ -659,9 +703,9 @@ export class Battle {
 		// from across the field. The group is the logic anchor (strikes/wins/camera).
 		const beacon = new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.2, 4), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0x7dffb0 : 0xff8a95 }));
 		beacon.position.y = 20; beacon.rotation.y = Math.PI / 4; grp.add(beacon);
-		const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.12, 0.12, 8, 6), '#4a3220'), toonMaterial());
+		const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.12, 0.12, 8, 6), '#4a3220'), worldMat());
 		pole.position.set(0, 18, 0); grp.add(pole);
-		const flag = new THREE.Mesh(paint(new THREE.PlaneGeometry(4, 2.3), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
+		const flag = new THREE.Mesh(paint(new THREE.PlaneGeometry(4, 2.3), p.cloth), new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85, metalness: 0.0 }));
 		flag.position.set(2.1, 20.5, 0); grp.add(flag);
 		this.flags.push(flag);
 		grp.position.set(x, 0, 0);
@@ -678,7 +722,7 @@ export class Battle {
 	private buildFrontLine(): THREE.Mesh {
 		const span = ARENA_Z * 2 + 12;
 		const mkBuf = (r: number, g: number, b: number) => {
-			const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, span), new THREE.MeshBasicMaterial({ map: edgeGradTexture(r, g, b), transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+			const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, span), new THREE.MeshBasicMaterial({ map: edgeGradTexture(r, g, b), transparent: true, opacity: 0.13, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
 			mesh.rotation.x = -Math.PI / 2; mesh.position.y = 0.05; this.scene.add(mesh); return mesh;
 		};
 		this.bufBull = mkBuf(30, 210, 120);
@@ -717,11 +761,11 @@ export class Battle {
 			const side = team === 'bull' ? -1 : 1;
 			const grp = new THREE.Group();
 			// a plain war-banner that marches with the host's edge of the front
-			const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.08, 0.1, 6.4, 6), '#4a3220'), toonMaterial());
+			const pole = new THREE.Mesh(paint(new THREE.CylinderGeometry(0.08, 0.1, 6.4, 6), '#4a3220'), worldMat());
 			pole.position.y = 3.2; grp.add(pole);
 			const finial = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.5, 6), new THREE.MeshBasicMaterial({ color: team === 'bull' ? 0x7dffb0 : 0xff8a95 }));
 			finial.position.y = 6.6; grp.add(finial);
-			const cloth = new THREE.Mesh(paint(new THREE.PlaneGeometry(1.9, 2.8), p.cloth), new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide, gradientMap: toonMaterial().gradientMap }));
+			const cloth = new THREE.Mesh(paint(new THREE.PlaneGeometry(1.9, 2.8), p.cloth), new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85, metalness: 0.0 }));
 			cloth.position.set(1.0, 5.0, 0); grp.add(cloth);
 			grp.position.set(side * 8, 0, ARENA_Z - 2);
 			this.scene.add(grp);
@@ -927,9 +971,9 @@ export class Battle {
 	// an army. One instanced soft circle per fighter grounds them for almost nothing.
 	private unitShadows!: THREE.InstancedMesh;
 	private buildUnitShadows() {
-		const geo = new THREE.CircleGeometry(1, 14); geo.rotateX(-Math.PI / 2);
-		const mat = new THREE.MeshBasicMaterial({ map: radialTexture('rgba(0,0,0,0.5)'), transparent: true, opacity: 0.5, depthWrite: false });
-		this.unitShadows = new THREE.InstancedMesh(geo, mat, 240);
+		const geo = new THREE.CircleGeometry(1, 16); geo.rotateX(-Math.PI / 2);
+		const mat = new THREE.MeshBasicMaterial({ map: radialTexture('rgba(0,0,0,0.72)'), transparent: true, opacity: 0.62, depthWrite: false });
+		this.unitShadows = new THREE.InstancedMesh(geo, mat, 320);
 		this.unitShadows.frustumCulled = false;
 		this.unitShadows.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 		this.unitShadows.count = 0;
@@ -1760,7 +1804,7 @@ export class Battle {
 			const size = u.legend ? 1.32 : u.tier === 'CHAMPION' ? 1.14 : u.tier === 'ELITE' ? 1.06 : 1;
 			this.chars.pose(u.char, u.x, gy - sink, u.z, u.face, size, st);
 			// ground the fighter with a soft blob shadow, fading out as it sinks away
-			if (shadowN < 240) {
+			if (shadowN < 320) {
 				const d = this.dummy;
 				d.position.set(u.x, gy + 0.06, u.z);
 				d.rotation.set(0, 0, 0);

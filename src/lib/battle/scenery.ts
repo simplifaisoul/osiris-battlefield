@@ -35,7 +35,9 @@ export class Scenery {
 		const proto = this.protos[name];
 		if (!proto || !this.scene || !places.length) return;
 		const inst = new THREE.InstancedMesh(proto.geometry, proto.material, places.length);
-		inst.castShadow = false; inst.receiveShadow = false; inst.frustumCulled = false;
+		// static world props cast real moonlight shadows onto the field (instanced, so the
+		// shadow pass stays cheap); the characters keep their soft blob contact shadows.
+		inst.castShadow = true; inst.receiveShadow = true; inst.frustumCulled = false;
 		const d = new THREE.Object3D();
 		places.forEach((p, i) => {
 			d.position.set(p.x, p.y ?? 0, p.z); d.rotation.set(0, p.r, 0); d.scale.setScalar(p.s); d.updateMatrix();
@@ -52,7 +54,7 @@ export class Scenery {
 		const m = proto.clone();
 		m.material = proto.material; // share the atlas material
 		m.position.set(x, y, z); m.rotation.y = r; m.scale.setScalar(s);
-		m.castShadow = true;
+		m.castShadow = true; m.receiveShadow = true;
 		this.scene.add(m);
 		return m;
 	}
