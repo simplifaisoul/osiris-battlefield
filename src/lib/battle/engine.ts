@@ -69,19 +69,19 @@ const ATK_CD: Record<Cls, number> = { spear: 1.05, duelist: 0.55, archer: 1.15, 
 const KILL_TEMPO = 2.1; // global lethality multiplier (per-hit = dmg * cd * tempo) — fights bite
 const ACQUIRE_R = 18; // how far a melee unit will lock onto an enemy
 
-const FRONT_MAX = 60;
-const CAP = FRONT_MAX + 22;
+const FRONT_MAX = 72;
+const CAP = FRONT_MAX + 30; // deep rear behind each host for the siege line + spawn
 // the price ladder is scaled: one world unit == PCT_PER_UNIT percent of price move
 // from the campaign anchor. This decouples the physical size of the field from the
 // price range, so the war can be fought over a big battlefield while a gate still
-// falls at a sane move (~±FRONT_MAX*0.9*PCT_PER_UNIT ≈ ±46%).
-const PCT_PER_UNIT = 0.85;
+// falls at a sane move (~±FRONT_MAX*0.9*PCT_PER_UNIT ≈ ±45%).
+const PCT_PER_UNIT = 0.7;
 // the fighting band runs deep so a big host reads as a massed army with real depth
-const ARENA_Z = 38;
+const ARENA_Z = 46;
 // the battlefield is a bounded board floating in a dark void
-const BOARD_W = 260;
-const BOARD_D = 210;
-const ROAD_Z = 11; // horizontal road across the map
+const BOARD_W = 340;
+const BOARD_D = 280;
+const ROAD_Z = 13; // horizontal road across the map
 const MELEE = 4.2;
 const SPEED = 8; // deliberate marching pace — the charge multiplier provides the sprint
 const UNIT_SCALE = 2.35;
@@ -236,9 +236,6 @@ export class Battle {
 	private warClock = 0; private battlePhase: WarPhase = 'form';
 	// war intensity: 0 → 1 the longer a campaign runs — musters bloodier reinforcements
 	private sudden = 0; private suddenAnnounced = false;
-	// small self-relaxing combat lean around the price line (the seam breathes with
-	// who's winning; it never drags the line off the true market cap)
-	private combatTug = 0;
 	// massed archery: volleys loose together on a shared signal during the standoff phases
 	private volleyT = 3; private volleyWindow = 0; private volleyAnnounced = false;
 	// the first strike after the horns sound lands in slow motion
@@ -275,7 +272,7 @@ export class Battle {
 	private scenery = new Scenery();
 	// units over this many alive per side stop mustering reinforcements; real trades
 	// always deploy. Keeps the field a readable clash of pro characters, not a mob.
-	private SIDE_CAP = 100;
+	private SIDE_CAP = 120;
 
 	// the intro must not release the player into an empty field while ~20MB of
 	// character models are still streaming in
@@ -312,6 +309,7 @@ export class Battle {
 		this.buildLights();
 		this.buildGround();
 		this.buildProps();
+		this.buildSiege();
 		this.capitalBull = this.buildCapital('bull', -CAP);
 		this.capitalBear = this.buildCapital('bear', CAP);
 		this.frontLine = this.buildFrontLine();
@@ -503,6 +501,121 @@ export class Battle {
 		this.scene.add(new THREE.Mesh(fm, new THREE.MeshBasicMaterial({ vertexColors: true }))); // unlit — burns bright at night
 	}
 
+	// ---------- siege line: catapults ranked at the rear that lob flaming boulders ----------
+	private catapults: { arm: THREE.Group; muzzle: THREE.Object3D; team: Team; sign: number; bx: number; bz: number; cd: number; anim: number; fired: boolean }[] = [];
+	private boulders: { mesh: THREE.Mesh; active: boolean; x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number; team: Team; spin: number }[] = [];
+	private readonly COCK = -0.5;   // arm winched down, throwing end low
+	private readonly ARMTOP = 0.95; // arm flung up and over on release
+
+	private buildSiege() {
+		// a pool of hot boulders that arc over the whole field
+		const rockGeo = new THREE.IcosahedronGeometry(0.9, 0);
+		const glowGeo = new THREE.SphereGeometry(1.7, 8, 8);
+		for (let i = 0; i < 16; i++) {
+			const mesh = new THREE.Mesh(rockGeo, new THREE.MeshStandardMaterial({ color: 0x2a1c14, emissive: new THREE.Color(0xff5a1e), emissiveIntensity: 1.5, roughness: 1, metalness: 0 }));
+			const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
+			mesh.add(glow); mesh.visible = false; mesh.frustumCulled = false;
+			this.scene.add(mesh);
+			this.boulders.push({ mesh, active: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, t: 0, team: 'bull', spin: Math.random() * 6 });
+		}
+		// three catapults per host, ranked across the rear just in front of the keep
+		for (const team of ['bull', 'bear'] as Team[]) {
+			const sign = team === 'bull' ? -1 : 1;
+			const bx = sign * (CAP - 8);
+			for (const bz of [-ARENA_Z * 0.55, 0, ARENA_Z * 0.55]) this.buildCatapult(team, sign, bx, bz);
+		}
+	}
+
+	private buildCatapult(team: Team, sign: number, x: number, z: number) {
+		const grp = new THREE.Group();
+		grp.position.set(x, this.terrainH(x, z), z);
+		grp.rotation.y = sign < 0 ? 0 : Math.PI; // local +x throws at the enemy
+		const wood = '#43301c', darkWood = '#2c2012', iron = '#6b6f78';
+		const statics: THREE.BufferGeometry[] = [];
+		const box = (w: number, h: number, d: number, hex: string, px: number, py: number, pz: number, rot = 0) => {
+			const g = paint(new THREE.BoxGeometry(w, h, d), hex); if (rot) g.rotateZ(rot); g.translate(px, py, pz); statics.push(g);
+		};
+		box(5.4, 0.5, 0.5, wood, 0, 0.3, -1.5); box(5.4, 0.5, 0.5, wood, 0, 0.3, 1.5); // skids
+		box(0.5, 0.4, 3.6, darkWood, -1.9, 0.4, 0); box(0.5, 0.4, 3.6, darkWood, 1.5, 0.4, 0); // cross ties
+		box(0.45, 3.4, 0.45, wood, -0.6, 1.9, -1.4, 0.3); box(0.45, 3.4, 0.45, wood, -0.6, 1.9, 1.4, 0.3); // A-frame
+		const axle = paint(new THREE.CylinderGeometry(0.16, 0.16, 3.6, 6), iron); axle.rotateX(Math.PI / 2); axle.translate(1.4, 0.65, 0); statics.push(axle);
+		for (const wz of [-1.6, 1.6]) { const w = paint(new THREE.CylinderGeometry(0.95, 0.95, 0.34, 10), darkWood); w.rotateX(Math.PI / 2); w.translate(1.4, 0.65, wz); statics.push(w); }
+		const sm = mergeGeometries(statics, false)!; sm.computeVertexNormals();
+		grp.add(new THREE.Mesh(sm, toonMaterial()));
+		// throwing arm on a pivot at the top of the A-frame
+		const arm = new THREE.Group(); arm.position.set(-0.6, 3.2, 0);
+		const armParts: THREE.BufferGeometry[] = [];
+		const beam = paint(new THREE.BoxGeometry(6.6, 0.34, 0.34), wood); beam.translate(2.1, 0, 0); armParts.push(beam);
+		const cw = paint(new THREE.BoxGeometry(1.1, 1.1, 1.1), iron); cw.translate(-1.5, 0, 0); armParts.push(cw); // counterweight
+		const bucket = paint(new THREE.CylinderGeometry(0.55, 0.36, 0.6, 8), darkWood); bucket.translate(5.1, 0.3, 0); armParts.push(bucket);
+		const am = mergeGeometries(armParts, false)!; am.computeVertexNormals();
+		arm.add(new THREE.Mesh(am, toonMaterial()));
+		arm.rotation.z = this.COCK;
+		const muzzle = new THREE.Object3D(); muzzle.position.set(5.1, 0.6, 0); arm.add(muzzle);
+		grp.add(arm);
+		this.scene.add(grp);
+		this.catapults.push({ arm, muzzle, team, sign, bx: x, bz: z, cd: 2.5 + Math.random() * 5, anim: 0, fired: false });
+	}
+
+	private launchBoulder(c: Battle['catapults'][number]) {
+		const b = this.boulders.find((x) => !x.active); if (!b) return;
+		const p = new THREE.Vector3(); c.muzzle.getWorldPosition(p);
+		// aim into the enemy host just past the front line
+		const tx = this.frontX + (-c.sign) * (7 + Math.random() * 24);
+		const tz = (Math.random() - 0.5) * ARENA_Z * 1.6;
+		const ty = groundY(tx, tz) + 0.5;
+		const T = 1.75, G = 24;
+		b.active = true; b.team = c.team; b.t = 0; b.spin = Math.random() * 6;
+		b.x = p.x; b.y = p.y; b.z = p.z;
+		b.vx = (tx - b.x) / T; b.vz = (tz - b.z) / T; b.vy = (ty - b.y) / T + 0.5 * G * T;
+		b.mesh.visible = true; b.mesh.position.copy(p);
+		this.spawnSmoke(p.x, p.y, p.z, 4);
+		this.spawnBurst(p.x, p.y, p.z, this.tmpColor.set(0xffb14a), 7);
+	}
+
+	private boulderImpact(b: Battle['boulders'][number]) {
+		const gy = groundY(b.x, b.z);
+		this.spawnBurst(b.x, gy + 0.6, b.z, this.tmpColor.set(0xff6a2a), 28);
+		this.spawnBurst(b.x, gy + 0.4, b.z, this.tmpColor.set(0xffe0a0), 12);
+		this.spawnSmoke(b.x, gy + 0.9, b.z, 9);
+		this.addDecal(b.x, b.z, 2.3);
+		this.shake = Math.min(1.3, this.shake + 0.3);
+		// crush a few enemy soldiers caught under it — spectacle, not the deciding force
+		const foe = b.team === 'bull' ? 'bear' : 'bull';
+		let hits = 0;
+		for (const u of this.units) {
+			if (u.team !== foe || u.dying > 0 || u.legend) continue;
+			const dx = u.x - b.x, dz = u.z - b.z;
+			if (dx * dx + dz * dz < 9 && ++hits <= 4) this.kill(u, []);
+			if (hits >= 4) break;
+		}
+	}
+
+	private updateSiege(dt: number) {
+		const firing = this.phase === 'battle';
+		const SWING = 0.26, DUR = 1.5, G = 24;
+		for (const c of this.catapults) {
+			if (c.anim > 0) {
+				c.anim += dt;
+				if (c.anim < SWING) { const k = c.anim / SWING; c.arm.rotation.z = this.COCK + (this.ARMTOP - this.COCK) * (k * k); }
+				else { const k = Math.min(1, (c.anim - SWING) / (DUR - SWING)); c.arm.rotation.z = this.ARMTOP + (this.COCK - this.ARMTOP) * k; }
+				if (c.anim >= SWING * 0.82 && !c.fired) { this.launchBoulder(c); c.fired = true; }
+				if (c.anim >= DUR) { c.anim = 0; c.fired = false; c.cd = 3.5 + Math.random() * 6; }
+			} else {
+				c.arm.rotation.z = this.COCK;
+				if (firing) { c.cd -= dt; if (c.cd <= 0) c.anim = 0.0001; }
+			}
+		}
+		for (const b of this.boulders) {
+			if (!b.active) continue;
+			b.t += dt; b.vy -= G * dt;
+			b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
+			b.spin += dt * 7; b.mesh.position.set(b.x, b.y, b.z); b.mesh.rotation.set(b.spin, b.spin * 0.7, 0);
+			if (Math.random() < dt * 26) this.spawnBurst(b.x, b.y, b.z, this.tmpColor.set(0xff7a2a), 1); // ember trail
+			if (b.y <= groundY(b.x, b.z) + 0.4 || b.t > 4) { this.boulderImpact(b); b.active = false; b.mesh.visible = false; }
+		}
+	}
+
 	// scatter real trees/rocks and raise the castles once the models arrive
 	private dressScenery() {
 		const rng = (a: number, b: number) => a + Math.random() * (b - a);
@@ -631,7 +744,9 @@ export class Battle {
 	private mcapTicks: { gx: number; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }[] = [];
 	private lastLadderMcap = 0;
 	private buildMcapTicks() {
-		for (let gx = -48; gx <= 48; gx += 16) {
+		// ticks fill the field between the centre and the gates, adapting to its width
+		const step = Math.round(FRONT_MAX / 4);
+		for (let gx = -step * 3; gx <= step * 3; gx += step) {
 			if (gx === 0) continue;
 			const c = document.createElement('canvas'); c.width = 192; c.height = 56;
 			const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
@@ -1226,6 +1341,7 @@ export class Battle {
 		this.step(simDt);
 		this.chars.update(simDt);
 		this.updateArrows(simDt);
+		this.updateSiege(simDt);
 		this.updateStrikes(simDt);
 		this.updateLights(simDt);
 		this.updateParticles(simDt);
@@ -1274,27 +1390,26 @@ export class Battle {
 		}
 
 		if (this.phase === 'battle') {
-			// THE LINE IS THE MARKET CAP. The front sits at the live cap's position on
-			// the price ladder (NewHedge-style): +1 world unit == +1% from the campaign
-			// anchor, so the marker always rides the true $ level on the ladder. Combat
-			// can't carry the line off the cap — the power balance gives the seam a
-			// small, self-relaxing lean so the melee breathes with who's winning, but
+			// THE LINE IS THE MARKET CAP — SPOT ON, ALWAYS. The front sits EXACTLY at the
+			// live cap's position on the price ladder: world x == pricePct / PCT_PER_UNIT,
+			// so the marker and every ladder tick read the same true $ level. Combat does
+			// NOT move the line at all — the armies clash wherever price puts the seam, and
 			// price, and price alone, decides where the line stands and when a gate falls.
 			const tot = bullPower + bearPower;
 			const delta = tot > 0 ? (bullPower - bearPower) / tot : 0;
 			const pricePct = this.lastLadderMcap > 0 ? (this.liveMcap / this.lastLadderMcap - 1) * 100 : 0;
 			const priceTarget = THREE.MathUtils.clamp(pricePct / PCT_PER_UNIT, -FRONT_MAX, FRONT_MAX);
 			// war intensity climbs the longer a campaign runs — it musters bloodier
-			// reinforcements (below); it does NOT move the line off the cap
+			// reinforcements (below); it does NOT touch the line.
 			this.sudden = THREE.MathUtils.clamp((this.warClock - 300) / 240, 0, 1);
 			if (this.sudden > 0 && !this.suddenAnnounced) {
 				this.suddenAnnounced = true;
 				this.onEvent?.({ type: 'sudden', team: delta >= 0 ? 'bull' : 'bear', tier: '', cls: 'spear', wallet: '', usd: 0, pct: 0 });
 			}
-			// ease the lean toward the current power balance (±~2.5% of the ladder)
-			this.combatTug += (THREE.MathUtils.clamp(delta, -1, 1) * FRONT_MAX * 0.05 - this.combatTug) * Math.min(1, dt * 0.8);
-			const target = THREE.MathUtils.clamp(priceTarget + this.combatTug, -FRONT_MAX, FRONT_MAX);
-			this.frontX += (target - this.frontX) * Math.min(1, dt * 1.1);
+			// glide the line onto the exact cap position (smoothing only — it settles
+			// precisely on price, never beside it)
+			this.frontX += (priceTarget - this.frontX) * Math.min(1, dt * 1.4);
+			if (Math.abs(priceTarget - this.frontX) < 0.05) this.frontX = priceTarget;
 			// price pushes the cap to the enemy end-zone → the theater falls
 			if (this.frontX > FRONT_MAX * 0.9) this.winCampaign('bull');
 			else if (this.frontX < -FRONT_MAX * 0.9) this.winCampaign('bear');
@@ -1314,8 +1429,8 @@ export class Battle {
 			this.accS += Math.max(this.reinS, FLOOR) * (1 - tilt) * heat * dt;
 			// hard rubber-band: hold each host near a big fighting strength so the clash
 			// at the line stays a massed war, and a broken side rallies fresh bands fast
-			if (bullCount < 62) this.accB += dt * (62 - bullCount) * 0.2;
-			if (bearCount < 62) this.accS += dt * (62 - bearCount) * 0.2;
+			if (bullCount < 80) this.accB += dt * (80 - bullCount) * 0.22;
+			if (bearCount < 80) this.accS += dt * (80 - bearCount) * 0.22;
 			while (this.accB >= 1) { this.accB -= 1; this.addUnit('bull', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false, true); }
 			while (this.accS >= 1) { this.accS -= 1; this.addUnit('bear', pickClass('SOLDIER', Math.random()), GARRISON, '', false, false, true); }
 		}
@@ -1372,7 +1487,7 @@ export class Battle {
 				// press together and fight, they never just stand in formation
 				const range = u.ranged ? 34 : shaken ? 7 : 30;
 				u.target = (u.flank ? acquire(u, 40, true) : null) || acquire(u, range);
-				u.retarget = 0.25 + Math.random() * 0.25;
+				u.retarget = 0.4 + Math.random() * 0.5; // re-scan foes less often — cheaper at big army sizes
 			}
 
 			let desiredFace: number | null = null;
@@ -1602,7 +1717,7 @@ export class Battle {
 		for (const u of this.units) if (u.char >= 0) this.chars.release(u.char);
 		this.units = []; this.frontX = 0; this.winner = null; this.phase = 'battle'; this.campaign++;
 		this.warClock = 0; this.battlePhase = 'form'; this.duelA = null; this.duelB = null; this.awaitClash = false;
-		this.sudden = 0; this.suddenAnnounced = false; this.combatTug = 0;
+		this.sudden = 0; this.suddenAnnounced = false;
 		// the next price-range battle opens around the latest price
 		this.momentumAnchor = this.momentum;
 		this.rebaseLadder();

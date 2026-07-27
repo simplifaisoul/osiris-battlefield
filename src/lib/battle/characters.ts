@@ -23,7 +23,7 @@ export type Team = 'bull' | 'bear';
 export type Role = 'spear' | 'duelist' | 'archer' | 'chariot' | 'guardian';
 export type CharState = 'spawn' | 'idle' | 'walk' | 'run' | 'attack' | 'death' | 'cheer';
 
-const CAP = 300; // hard ceiling on concurrent skinned characters
+const CAP = 380; // hard ceiling on concurrent skinned characters
 
 const MODELS: Record<string, string> = {
 	knight: '/models/Adv_Knight.glb',
