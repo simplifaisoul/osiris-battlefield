@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
 	EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, VignetteEffect,
-	ToneMappingEffect, ToneMappingMode, HueSaturationEffect, TiltShiftEffect
+	ToneMappingEffect, ToneMappingMode, HueSaturationEffect, DepthOfFieldEffect
 } from 'postprocessing';
 import { createNoise2D } from 'simplex-noise';
 import { tierForPct, GARRISON, TIERS, type Tier } from './tiers';
@@ -179,28 +179,6 @@ function groundTexture(): THREE.Texture {
 	for (let i = 0; i < 14000; i++) { const v = 150 + Math.random() * 90; x.fillStyle = `rgba(${v},${v - 6},${v - 22},${Math.random() * 0.35})`; x.fillRect(Math.random() * S, Math.random() * S, 1.6, 1.6); }
 	const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(7, 4); t.anisotropy = 4; return t;
 }
-// a procedural tangent-space normal map baked from multi-octave noise, so the ground
-// catches the moonlight with real surface relief instead of reading as a flat plane.
-function groundNormalTexture(): THREE.Texture {
-	const S = 256;
-	const c = document.createElement('canvas'); c.width = c.height = S;
-	const x = c.getContext('2d')!;
-	const n = createNoise2D(() => 0.71);
-	const h = (i: number, j: number) => n(i * 0.05, j * 0.05) * 1 + n(i * 0.13, j * 0.13) * 0.5 + n(i * 0.31, j * 0.31) * 0.22;
-	const img = x.createImageData(S, S);
-	for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
-		const dx = (h(i - 1, j) - h(i + 1, j)) * 1.6;
-		const dy = (h(i, j - 1) - h(i, j + 1)) * 1.6;
-		const len = Math.hypot(dx, dy, 1);
-		const k = (j * S + i) * 4;
-		img.data[k] = (dx / len * 0.5 + 0.5) * 255;
-		img.data[k + 1] = (dy / len * 0.5 + 0.5) * 255;
-		img.data[k + 2] = (1 / len * 0.5 + 0.5) * 255;
-		img.data[k + 3] = 255;
-	}
-	x.putImageData(img, 0, 0);
-	const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(14, 9); t.colorSpace = THREE.NoColorSpace; return t;
-}
 function skyTexture(): THREE.Texture {
 	// a deep cinematic night: layered blue-violet void, a drifting nebula band, dense
 	// multi-size stars and a luminous moon wrapped in atmospheric haze.
@@ -268,6 +246,7 @@ export class Battle {
 	private scene = new THREE.Scene();
 	private camera: THREE.PerspectiveCamera;
 	private composer!: EffectComposer;
+	private dof!: DepthOfFieldEffect;
 
 	private units: Unit[] = [];
 	private nextId = 0;
@@ -438,10 +417,13 @@ export class Battle {
 		const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
 		const vignette = new VignetteEffect({ offset: 0.26, darkness: 0.62 });
 		this.composer.addPass(new EffectPass(this.camera, bloom, grade, tone, vignette));
-		// a subtle tilt-shift keeps the eye on the fighting band and gives the field the
-		// premium look of a lit war diorama (kept gentle so units never read as blurry).
-		const tilt = new TiltShiftEffect({ offset: 0.18, rotation: 0, focusArea: 0.82, feather: 0.5, kernelSize: 1 });
-		this.composer.addPass(new EffectPass(this.camera, tilt, new SMAAEffect()));
+		// CINEMATIC DEPTH OF FIELD: auto-focuses on the point the war-camera frames (the
+		// featured champion / the front line), throwing the far ranks and near foreground
+		// into soft bokeh — real lens focus, not a flat tilt-shift. Half-res for the GPU.
+		this.dof = new DepthOfFieldEffect(this.camera, { focusRange: 0.4, focalLength: 0.16, bokehScale: 1.25, resolutionScale: 0.4 });
+		this.dof.target = this._camTarget;
+		this.composer.addPass(new EffectPass(this.camera, this.dof));
+		this.composer.addPass(new EffectPass(this.camera, new SMAAEffect()));
 	}
 
 	// image-based lighting: a PMREM night dome gives every PBR material a soft, directional
@@ -508,7 +490,10 @@ export class Battle {
 
 	private buildGround() {
 		const tex = groundTexture();
-		const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: tex, normalMap: groundNormalTexture(), normalScale: new THREE.Vector2(0.42, 0.42), vertexColors: true, roughness: 0.98, metalness: 0.0 });
+		// clean matte painterly earth to match the stylised fighters: no normal/rough maps
+		// glinting under every light, low env reflection — the ground reads as solid ground,
+		// and the characters, moon and mist stay the stars.
+		const mat = new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 1.0, metalness: 0.0, envMapIntensity: 0.35 });
 		const geo = new THREE.PlaneGeometry(BOARD_W, BOARD_D, 210, 160);
 		const noise2D = createNoise2D(() => 0.42);
 		const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -567,12 +552,6 @@ export class Battle {
 		// crates are real CC0 models placed by the Scenery loader once it streams in.
 		const poles: THREE.BufferGeometry[] = [];
 		const flames: THREE.BufferGeometry[] = [];
-		// warm firelight pools cast on the ground under each torch — a cheap fake light
-		// (additive ground decal) that pools real-looking firelight without the per-fragment
-		// cost of a dozen point lights across 150+ characters.
-		const poolTex = radialTexture('rgba(255,150,60,0.85)');
-		const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false });
-		this.firePoolMat = poolMat;
 		const torchAt = (x: number, z: number) => {
 			const y = this.terrainH(x, z);
 			const pole = paint(new THREE.CylinderGeometry(0.09, 0.13, 2.6, 5), '#2e2318'); pole.translate(x, y + 1.3, z);
@@ -581,8 +560,6 @@ export class Battle {
 			const fl = paint(new THREE.ConeGeometry(0.22, 0.62, 6), '#ffb14a'); fl.translate(x, y + 3.1, z);
 			const core = paint(new THREE.SphereGeometry(0.12, 6, 5), '#ffe6a0'); core.translate(x, y + 2.92, z);
 			flames.push(fl, core);
-			const pool = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 6.5), poolMat);
-			pool.rotation.x = -Math.PI / 2; pool.position.set(x, y + 0.14, z); pool.renderOrder = 1; this.scene.add(pool);
 		};
 		for (let tx = -96; tx <= 96; tx += 16) { torchAt(tx, ROAD_Z - 4.2); torchAt(tx + 8, ROAD_Z + 4.2); }
 		for (const cx of [-CAP, CAP]) for (const [dx, dz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]] as const) torchAt(cx + dx, dz);
@@ -949,7 +926,6 @@ export class Battle {
 	}
 	// ambient war-embers: faint gold motes drifting up off the field all night long
 	private embers!: THREE.Points; private emberPos!: Float32Array; private emberVel!: Float32Array; private emberLife!: Float32Array; private EMBER_N = 150;
-	private firePoolMat!: THREE.MeshBasicMaterial;
 	private mist!: THREE.Points; private mistPos!: Float32Array; private MIST_N = 46;
 	private buildEmbers() {
 		const N = this.EMBER_N;
@@ -985,8 +961,6 @@ export class Battle {
 			p[i * 3 + 2] += v[i * 3 + 2] * dt;
 		}
 		(this.embers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
-		// torches breathe — a shared subtle flicker across every firelight pool
-		if (this.firePoolMat) this.firePoolMat.opacity = 0.13 + Math.sin(this.time * 6) * 0.03 + Math.sin(this.time * 11 + 1) * 0.02;
 	}
 
 	// low battlefield mist: broad, cool, slow-drifting motes that pool in the fighting
