@@ -420,7 +420,7 @@ export class Battle {
 		// CINEMATIC DEPTH OF FIELD: auto-focuses on the point the war-camera frames (the
 		// featured champion / the front line), throwing the far ranks and near foreground
 		// into soft bokeh — real lens focus, not a flat tilt-shift. Half-res for the GPU.
-		this.dof = new DepthOfFieldEffect(this.camera, { focusRange: 0.4, focalLength: 0.16, bokehScale: 1.25, resolutionScale: 0.4 });
+		this.dof = new DepthOfFieldEffect(this.camera, { focusRange: 0.5, focalLength: 0.2, bokehScale: 0.7, resolutionScale: 0.7 });
 		this.dof.target = this._camTarget;
 		this.composer.addPass(new EffectPass(this.camera, this.dof));
 		this.composer.addPass(new EffectPass(this.camera, new SMAAEffect()));
