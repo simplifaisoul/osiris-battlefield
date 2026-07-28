@@ -562,7 +562,7 @@
 	.ticker { text-align: center; animation: rise 0.6s both; }
 	.mcap { display: flex; flex-direction: column; align-items: center; }
 	.mcap .kick { font-size: 9px; letter-spacing: 0.2em; color: var(--text-3); }
-	.mcap-v { font-size: 42px; font-weight: 800; color: #fff; line-height: 1.05; text-shadow: 0 2px 20px rgba(0,0,0,0.6); font-variant-numeric: tabular-nums; }
+	.mcap-v { font-size: 46px; font-weight: 800; color: #fff; line-height: 1.05; letter-spacing: 0.01em; text-shadow: 0 0 26px rgba(150,200,255,0.2), 0 2px 20px rgba(0,0,0,0.7); font-variant-numeric: tabular-nums; }
 	.mcap-v.pulse { animation: countflash 0.7s ease-out; }
 	@keyframes countflash { 0% { transform: scale(1); } 25% { transform: scale(1.045); text-shadow: 0 0 34px rgba(var(--gold-rgb), 0.6), 0 2px 20px rgba(0,0,0,0.6); } 100% { transform: scale(1); } }
 	.subline { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; margin-top: 4px; }
@@ -601,10 +601,12 @@
 	.chip:hover { border-color: rgba(var(--gold-rgb), 0.3); }
 
 	/* ── WALLS ─────────────────────────────────────────── */
-	.wall { position: fixed; top: 96px; z-index: 10; animation: rise 0.6s 0.1s both; }
-	.wall.left { left: 22px; text-align: left; }
-	.wall.right { right: 22px; text-align: right; }
-	.wall-kick { font-size: 10px; letter-spacing: 0.2em; opacity: 0.8; }
+	.wall { position: fixed; top: 108px; z-index: 10; padding: 9px 13px 10px; border-radius: 11px;
+		background: linear-gradient(160deg, rgba(20,26,38,0.82), rgba(8,10,16,0.86));
+		box-shadow: 0 12px 32px -12px rgba(0,0,0,0.62), inset 0 1px 0 rgba(190,216,255,0.06); animation: rise 0.6s 0.1s both; }
+	.wall.left { left: 22px; text-align: left; border-left: 2px solid var(--crimson); }
+	.wall.right { right: 22px; text-align: right; border-right: 2px solid var(--green); }
+	.wall-kick { font-size: 9px; font-weight: 700; letter-spacing: 0.18em; opacity: 0.95; }
 	.wall-v { font-size: 27px; font-weight: 800; text-shadow: 0 0 20px currentColor; font-variant-numeric: tabular-nums; }
 	.wall-bar { width: 120px; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.08); margin: 5px 0 3px; overflow: hidden; }
 	.wall.right .wall-bar { margin-left: auto; }
