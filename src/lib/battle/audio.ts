@@ -2,7 +2,7 @@
 // triggered by a real battlefield event and attenuated by its distance from the
 // camera. Starts off (browsers need a click to allow audio anyway).
 
-export type SoundKind = 'shot' | 'cannon' | 'boom' | 'rocket' | 'whoosh' | 'gun' | 'heli' | 'jet' | 'bomber' | 'siren' | 'nuke' | 'victory' | 'round';
+export type SoundKind = 'shot' | 'cannon' | 'boom' | 'rocket' | 'whoosh' | 'gun' | 'flak' | 'heli' | 'jet' | 'bomber' | 'siren' | 'nuke' | 'victory' | 'round';
 
 export class WarAudio {
 	private ctx: AudioContext | null = null;
@@ -215,6 +215,26 @@ export class WarAudio {
 				o.start(t);
 				o.stop(t + 1.4);
 				noise(1.3, 'bandpass', 1800, 900, 0.9);
+				break;
+			}
+			case 'flak': {
+				// an AA battery's burst: a quick run of hollow pom-poms
+				out.gain.value = 0.3 * v;
+				for (let k = 0; k < 6; k++) {
+					const at = t + k * 0.13;
+					const o = ctx.createOscillator();
+					o.type = 'sine';
+					o.frequency.setValueAtTime(150, at);
+					o.frequency.exponentialRampToValueAtTime(55, at + 0.12);
+					const g = ctx.createGain();
+					g.gain.setValueAtTime(0.0001, at);
+					g.gain.exponentialRampToValueAtTime(0.8, at + 0.005);
+					g.gain.exponentialRampToValueAtTime(0.0008, at + 0.14);
+					o.connect(g).connect(out);
+					o.start(at);
+					o.stop(at + 0.16);
+				}
+				noise(0.9, 'bandpass', 700, 300, 1.2);
 				break;
 			}
 			case 'siren': {

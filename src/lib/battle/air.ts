@@ -9,7 +9,17 @@ import * as THREE from 'three';
 import * as M from './models';
 import type { Fx } from './fx';
 import { type Army, DIR } from './army';
-import { heightAt, BASE_X, MINZ, MAXZ, MINX, MAXX, clampZ } from './world';
+import { heightAt, isWater, BASE_X, HQ, MINZ, MAXZ, MINX, MAXX, clampZ } from './world';
+
+type AASite = {
+	side: number;
+	x: number; y: number; z: number;
+	gun: THREE.Object3D;
+	yaw: number; pitch: number;
+	fire: number; // seconds left in the current burst
+	cool: number; // seconds until it may open up again
+	shotT: number;
+};
 
 export type StrikeKind = 'heli' | 'jet' | 'bomber' | 'nuke';
 type CraftKind = 'heli' | 'jet' | 'bomber';
@@ -31,7 +41,7 @@ type Craft = {
 };
 
 export type AirHooks = {
-	sound(kind: CraftKind | 'gun' | 'siren', x: number, z: number): void;
+	sound(kind: CraftKind | 'gun' | 'siren' | 'flak', x: number, z: number): void;
 	/** A warhead reached the ground. */
 	nuke(x: number, z: number, scale: number, victims: number): void;
 };
@@ -58,12 +68,47 @@ export class Air {
 	];
 	private rotorMat = new THREE.MeshStandardMaterial({ vertexColors: true, color: '#2a2a2a', roughness: 0.6 });
 	private warheads = 0;
+	private aa: AASite[] = [];
 
 	constructor(
 		private fx: Fx,
 		private army: Army,
 		private hooks: AirHooks
-	) {}
+	) {
+		// anti-aircraft batteries: two guarding each HQ, two on each side's rear line
+		const mountGeo = M.aaMount();
+		const gunGeo = M.aaGuns();
+		const mountMat = [
+			new THREE.MeshStandardMaterial({ vertexColors: true, color: '#8fcf9e', roughness: 0.8, flatShading: true }),
+			new THREE.MeshStandardMaterial({ vertexColors: true, color: '#d99a92', roughness: 0.8, flatShading: true })
+		];
+		const gunMat = new THREE.MeshStandardMaterial({ vertexColors: true, color: '#5d6660', roughness: 0.5, metalness: 0.3, flatShading: true });
+		for (const side of [0, 1]) {
+			const dir = DIR[side];
+			const hq = side === 0 ? HQ.bull : HQ.bear;
+			const spots: [number, number][] = [
+				[hq.x - dir * 16, hq.z + 24],
+				[hq.x - dir * 16, hq.z - 22],
+				[dir * 150, 96],
+				[dir * 150, -92]
+			];
+			for (const [x0, z0] of spots) {
+				let z = z0;
+				for (let k = 0; k < 10 && isWater(x0, z); k++) z += z > 0 ? -5 : 5;
+				const y = heightAt(x0, z);
+				const mount = new THREE.Mesh(mountGeo, mountMat[side]);
+				mount.position.set(x0, y, z);
+				const gun = new THREE.Mesh(gunGeo, gunMat);
+				gun.position.set(x0, y + 1.7, z);
+				gun.rotation.order = 'YXZ';
+				gun.rotation.y = side === 0 ? Math.PI : 0;
+				gun.rotation.z = 0.5;
+				mount.castShadow = mount.receiveShadow = gun.castShadow = true;
+				this.group.add(mount, gun);
+				this.aa.push({ side, x: x0, y: y + 1.7, z, gun, yaw: gun.rotation.y, pitch: 0.5, fire: 0, cool: Math.random(), shotT: 0 });
+			}
+		}
+	}
 
 	get active() {
 		return this.crafts.length + this.warheads;
@@ -202,6 +247,68 @@ export class Air {
 				this.group.remove(c.obj);
 				this.crafts.splice(i, 1);
 			}
+		}
+		this.updateAA(dt);
+	}
+
+	/** Each battery tracks the nearest enemy aircraft in range and hoses it with leading bursts. */
+	private updateAA(dt: number) {
+		for (const s of this.aa) {
+			// a battery the front has rolled over falls silent
+			const manned = DIR[s.side] * (s.x - this.army.front) > 12;
+			let target: Craft | null = null;
+			let best = 240;
+			if (manned) {
+				for (const c of this.crafts) {
+					if (c.side === s.side || c.delay > 0 || c.y < 8) continue;
+					const d = Math.hypot(c.x - s.x, c.y - s.y, c.z - s.z);
+					if (d < best) {
+						best = d;
+						target = c;
+					}
+				}
+			}
+			s.cool -= dt;
+			if (target) {
+				// lead the target by roughly the shell's flight time
+				const lead = best / 300;
+				const ax = target.x + target.vx * lead;
+				const ay = target.y + target.vy * lead;
+				const az = target.z + target.vz * lead;
+				const wantYaw = Math.atan2(-(az - s.z), ax - s.x);
+				const wantPitch = Math.atan2(ay - s.y, Math.hypot(ax - s.x, az - s.z));
+				s.yaw += wrap(wantYaw - s.yaw) * Math.min(1, dt * 4);
+				s.pitch += (wantPitch - s.pitch) * Math.min(1, dt * 4);
+				if (s.fire <= 0 && s.cool <= 0) {
+					s.fire = rand(1, 1.6);
+					this.hooks.sound('flak', s.x, s.z);
+				}
+				if (s.fire > 0) {
+					s.fire -= dt;
+					if (s.fire <= 0) s.cool = rand(0.7, 1.4);
+					s.shotT -= dt;
+					while (s.shotT <= 0) {
+						s.shotT += 0.08;
+						const cy = Math.cos(s.yaw);
+						const sy = Math.sin(s.yaw);
+						const cp = Math.cos(s.pitch);
+						const mx = s.x + cy * cp * M.AA_MUZZLE;
+						const my = s.y + Math.sin(s.pitch) * M.AA_MUZZLE;
+						const mz = s.z - sy * cp * M.AA_MUZZLE;
+						const bx = ax + rand(-6, 6);
+						const by = ay + rand(-4, 4);
+						const bz = az + rand(-6, 6);
+						this.fx.muzzle(mx, my, mz, 1.2);
+						this.fx.tracer(mx, my, mz, bx, by, bz, 3.2, 2.3, 1.1, 320, 5, 0.13, () => {
+							if (Math.random() < 0.45) this.fx.flak(bx, by, bz);
+						});
+					}
+				}
+			} else {
+				s.fire = 0;
+				s.pitch += (0.5 - s.pitch) * Math.min(1, dt); // stand-to, barrels up
+			}
+			s.gun.rotation.set(0, s.yaw, s.pitch, 'YXZ');
 		}
 	}
 

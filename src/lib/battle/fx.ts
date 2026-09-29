@@ -232,6 +232,7 @@ export class Fx {
 	private rings: Ring[] = [];
 	private ringMesh: THREE.InstancedMesh;
 	private lights: THREE.PointLight[] = [];
+	private fires: { x: number; y: number; z: number; t: number; life: number; s: number }[] = [];
 	private m = new THREE.Matrix4();
 	private q = new THREE.Quaternion();
 	private v = new THREE.Vector3();
@@ -288,6 +289,7 @@ export class Fx {
 		this.tracers.length = 0;
 		this.ords.length = 0;
 		this.rings.length = 0;
+		this.fires.length = 0;
 	}
 
 	// ── one-shots ───────────────────────────────────────────────────────
@@ -319,6 +321,25 @@ export class Fx {
 		this.add.spawn(x, y + 0.3, z, 0, 0, 0, 0.07, 0.9, 1.6, 3.4, 2.6, 1.3, 1, 2, 1, 0.3, 0);
 		for (let k = 0; k < 2; k++)
 			this.smoke.spawn(x, y + 0.2, z, rand(-1.5, 1.5), rand(2, 5), rand(-1.5, 1.5), rand(0.7, 1.2), 0.6, 2.2, 0.5, 0.43, 0.32, 0.6, 0.55, 0.5, 0.4, 0, 2, -3);
+	}
+
+	/** A patch of ground left burning: flames licking up, a smoke column, dying down at the end. */
+	burn(x: number, z: number, size: number, life: number) {
+		if (this.fires.length >= 48) this.fires.shift();
+		this.fires.push({ x, y: heightAt(x, z), z, t: 0, life, s: size });
+	}
+
+	/** An anti-aircraft shell bursting in the air: a flash, sparks, a black puff. */
+	flak(x: number, y: number, z: number) {
+		this.add.spawn(x, y, z, 0, 0, 0, 0.09, 1.5, 3.5, 3.2, 2.2, 1.1, 1, 1.5, 0.5, 0.1, 0);
+		this.smoke.spawn(x, y, z, rand(-0.6, 0.6), rand(-0.2, 0.4), rand(-0.6, 0.6), rand(2.2, 3.2), 1.4, 5.2, 0.06, 0.06, 0.06, 0.85, 0.2, 0.2, 0.2, 0, 1.2, 0);
+		for (let k = 0; k < 5; k++)
+			this.add.spawn(x, y, z, rand(-9, 9), rand(-9, 9), rand(-9, 9), 0.3, 0.3, 0.1, 3, 2, 0.8, 1, 1.5, 0.4, 0.1, 0, 1, -8);
+	}
+
+	/** Low battle smoke drifting across the lines. */
+	haze(x: number, y: number, z: number) {
+		this.smoke.spawn(x, y, z, rand(0.6, 1.6), rand(0.05, 0.3), rand(-0.4, 0.4), rand(9, 13), rand(7, 10), rand(18, 26), 0.5, 0.49, 0.46, 0.14, 0.58, 0.57, 0.55, 0, 0.05, 0, 2.5);
 	}
 
 	/** A bare flash of light: glow sprite + a borrowed point light. */
@@ -435,6 +456,17 @@ export class Fx {
 	// ── frame ───────────────────────────────────────────────────────────
 
 	update(dt: number) {
+		for (let i = this.fires.length - 1; i >= 0; i--) {
+			const f = this.fires[i];
+			f.t += dt;
+			if (f.t > f.life) {
+				this.fires.splice(i, 1);
+				continue;
+			}
+			const k = Math.min(1, (f.life - f.t) / (f.life * 0.35)); // dies down over the last third
+			if (Math.random() < dt * 22 * f.s * k) this.flame(f.x + rand(-1, 1) * f.s, f.y + 0.3, f.z + rand(-1, 1) * f.s, 1.6 * f.s * (0.6 + 0.4 * k));
+			if (Math.random() < dt * 3.5 * k) this.puff(f.x, f.y + 1.5, f.z, 1.4 * f.s, 0.1, 0.1 + 0.6 * k, 5);
+		}
 		this.add.update(dt);
 		this.smoke.update(dt);
 		this.updateTracers(dt);

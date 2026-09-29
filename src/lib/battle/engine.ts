@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { EffectComposer, RenderPass, EffectPass, BloomEffect, ToneMappingEffect, ToneMappingMode, VignetteEffect } from 'postprocessing';
 import * as W from './world';
-import { buildScenery } from './scenery';
+import { buildScenery, type Scenery } from './scenery';
 import { Army, BULL, BEAR, DIR } from './army';
 import { Air, type StrikeKind } from './air';
 import { Fx } from './fx';
@@ -75,6 +75,8 @@ export class Battlefield {
 	private front = 0;
 	private vol = 0;
 	private buf = [14, 14];
+	private scenery: Scenery;
+	private hazeT = 0;
 
 	private label: { mesh: THREE.Mesh; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture; text: string; at: number };
 	private signs: THREE.Sprite[] = [];
@@ -137,10 +139,10 @@ export class Battlefield {
 			uBoard: { value: new THREE.Vector4(W.MINX, W.MINZ, W.W, W.D) }
 		};
 		this.ground = W.buildGround(this.uniforms);
-		this.scene.add(this.ground, W.buildSlab(), W.buildWater(), W.buildRoad());
-		const scenery = buildScenery();
-		this.scene.add(scenery);
-		scenery.traverse((o) => {
+		this.scene.add(this.ground, W.buildSlab(), W.buildWater(this.uniforms.uTime), W.buildRoad());
+		this.scenery = buildScenery({ uTime: this.uniforms.uTime, uFront: this.uniforms.uFront }, this.mobile);
+		this.scene.add(this.scenery.group);
+		this.scenery.group.traverse((o) => {
 			if (o instanceof THREE.Sprite && o.name === 'sign') this.signs.push(o);
 			if (o instanceof THREE.Mesh && o.name === 'flag') {
 				const pos = o.geometry.attributes.position.array as Float32Array;
@@ -158,7 +160,8 @@ export class Battlefield {
 		});
 		this.army = new Army(this.fx, {
 			shot: (x, z) => this.audio.play('shot', x, z),
-			cannon: (x, z) => this.audio.play('cannon', x, z)
+			cannon: (x, z) => this.audio.play('cannon', x, z),
+			track: (x, z, rot) => this.scorch.track(x, z, rot)
 		});
 		this.air = new Air(this.fx, this.army, {
 			sound: (k, x, z) => this.audio.play(k, x, z),
@@ -266,6 +269,13 @@ export class Battlefield {
 		this.army.blast(x, z, 32 * scale, 0.95, victims);
 		this.scorch.crater(x, z, 22 * scale);
 		this.scorch.crater(x, z, 12 * scale);
+		// the fireball chars the woods and villages around ground zero and leaves them burning
+		this.scenery.scorch(x, z, 30 * scale);
+		for (let k = 0; k < 14; k++) {
+			const a = Math.random() * Math.PI * 2;
+			const r = (6 + Math.random() * 22) * scale;
+			this.fx.burn(x + Math.cos(a) * r, z + Math.sin(a) * r, 1 + Math.random(), 12 + Math.random() * 14);
+		}
 		this.rig.jolt(3);
 		this.audio.play('nuke', x, z, scale);
 		const d = Math.hypot(x - this.rig.target.x, z - this.rig.target.z);
@@ -475,6 +485,15 @@ export class Battlefield {
 		this.nukes.update(dt);
 		this.fx.update(dt);
 		this.scorch.update(now);
+
+		// battle smoke drifting low along the lines
+		this.hazeT -= dt;
+		if (this.hazeT <= 0 && this.phase !== 'idle') {
+			this.hazeT = 0.28;
+			const hz = W.MINZ + 10 + Math.random() * (W.D - 20);
+			const hx = this.army.frontAt(hz) + (Math.random() - 0.5) * 26;
+			this.fx.haze(hx, W.heightAt(hx, hz) + 1.5 + Math.random() * 3, hz);
+		}
 
 		const u = this.uniforms;
 		u.uFront.value = this.front;

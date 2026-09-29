@@ -195,6 +195,30 @@ export function rocketTruck(): Geo {
 }
 export const TRUCK_LAUNCH = V(0.7, 2.4, 0);
 
+/** Anti-aircraft emplacement: a sandbagged pit and the gun's pedestal. */
+export function aaMount(): Geo {
+	const bag = new THREE.Color('#b8a275');
+	const bags: Geo[] = [];
+	for (let k = 0; k < 14; k++) {
+		const a = (k / 14) * Math.PI * 2;
+		bags.push(box(1.1, 0.5, 0.6, Math.cos(a) * 2.6, 0.25, Math.sin(a) * 2.6, bag, 0, -a + Math.PI / 2));
+	}
+	return merge([cyl(2.3, 2.5, 0.25, 12, 0, 0.12, 0, 0.45), cyl(0.35, 0.5, 1.3, 8, 0, 0.75, 0, 0.5), ...bags]);
+}
+
+/** The twin-barrelled gun, pivoting (yaw and elevation) about its own origin; barrels along +x. */
+export function aaGuns(): Geo {
+	return merge([
+		box(1.3, 0.75, 1.1, 0, 0, 0),
+		box(0.5, 0.9, 0.12, -0.2, 0.3, 0.62, 0.7),
+		box(0.5, 0.9, 0.12, -0.2, 0.3, -0.62, 0.7),
+		limb(V(0.5, 0.12, 0.26), V(3.1, 0.12, 0.26), 0.13, 0.35),
+		limb(V(0.5, 0.12, -0.26), V(3.1, 0.12, -0.26), 0.13, 0.35),
+		cyl(0.3, 0.3, 0.35, 8, -0.3, 0.45, 0, 0.3, Math.PI / 2)
+	]);
+}
+export const AA_MUZZLE = 3.2;
+
 // ── aircraft ─────────────────────────────────────────────────────────────
 
 export function heliBody(): Geo {

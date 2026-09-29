@@ -103,7 +103,7 @@ export const clampX = (x: number) => Math.min(MAXX - 6, Math.max(MINX + 6, x));
 export const clampZ = (z: number) => Math.min(MAXZ - 6, Math.max(MINZ + 6, z));
 
 // ── ground colour (vertex colours: meadow variation + ploughed fields) ────
-const FIELDS = (() => {
+export const FIELDS = (() => {
 	const r = mulberry32(99);
 	const out: { x: number; z: number; w: number; d: number; a: number; tone: number }[] = [];
 	for (let i = 0; i < 26; i++) {
@@ -145,6 +145,36 @@ function groundColor(x: number, z: number, h: number, out: THREE.Color) {
 }
 
 // ── ground shader patch ───────────────────────────────────────────────────
+
+/** Smooth value noise, shared by the ground, water and grass shaders. */
+export const NOISE_GLSL = /* glsl */ `
+float gHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p){
+	vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+	float a = gHash(i), b = gHash(i + vec2(1.0, 0.0)), c = gHash(i + vec2(0.0, 1.0)), d = gHash(i + vec2(1.0, 1.0));
+	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+// drifting cloud shadow over the board: 0 = sunlit, 1 = under a cloud
+float cloudShade(vec2 xz, float t){
+	vec2 cp = xz * 0.0055 + vec2(t * 0.011, t * 0.004);
+	float cl = vnoise(cp) * 0.6 + vnoise(cp * 2.3 + 7.1) * 0.4;
+	return smoothstep(0.52, 0.72, cl);
+}`;
+
+/** Front-line geometry + Bull/Bear territory tint (mirrors wobble() in JS). */
+export const TERRITORY_GLSL = /* glsl */ `
+uniform float uFront, uTime;
+float frontDist(vec3 wp){
+	float wob = 2.2*sin(wp.z*0.045 + uTime*0.35) + 1.3*sin(wp.z*0.11 - uTime*0.5 + 1.7) + 0.7*sin(wp.z*0.23 + uTime*0.9 + 0.4);
+	return wp.x - (uFront + wob);
+}
+vec3 territory(vec3 base, float fd){
+	float lum = dot(base, vec3(0.299, 0.587, 0.114));
+	vec3 bear = vec3(lum * 1.7, lum * 1.17, lum * 0.42);
+	vec3 bull = base * vec3(0.94, 1.08, 0.9);
+	return mix(bear, bull, smoothstep(-0.5, 0.5, fd));
+}`;
+
 export type GroundUniforms = {
 	uFront: { value: number };
 	uTime: { value: number };
@@ -159,38 +189,48 @@ function patchGround(mat: THREE.MeshStandardMaterial, u: GroundUniforms) {
 	mat.onBeforeCompile = (s) => {
 		Object.assign(s.uniforms, u);
 		s.vertexShader = s.vertexShader
-			.replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+			.replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNorm;')
+			.replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvWNorm = normalize(mat3(modelMatrix) * objectNormal);')
 			.replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
 		s.fragmentShader = s.fragmentShader
 			.replace(
 				'#include <common>',
 				`#include <common>
 varying vec3 vWPos;
-uniform float uFront, uTime, uBufBull, uBufBear;
+varying vec3 vWNorm;
+uniform float uBufBull, uBufBear;
 uniform sampler2D uMarkers, uScorch;
 uniform vec4 uBoard;
-float gHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`
+${NOISE_GLSL}
+${TERRITORY_GLSL}`
 			)
 			.replace(
 				'#include <color_fragment>',
 				`#include <color_fragment>
-float wob = 2.2*sin(vWPos.z*0.045 + uTime*0.35) + 1.3*sin(vWPos.z*0.11 - uTime*0.5 + 1.7) + 0.7*sin(vWPos.z*0.23 + uTime*0.9 + 0.4);
-float fd = vWPos.x - (uFront + wob);
-vec3 gBase = diffuseColor.rgb;
-float gLum = dot(gBase, vec3(0.299, 0.587, 0.114));
-vec3 bearCol = vec3(gLum * 1.7, gLum * 1.17, gLum * 0.42);
-vec3 bullCol = gBase * vec3(0.94, 1.08, 0.9);
-vec3 gCol = mix(bearCol, bullCol, smoothstep(-0.5, 0.5, fd));
-gCol *= 0.93 + 0.1 * gHash(floor(vWPos.xz * 1.3));
+float fd = frontDist(vWPos);
+float m1 = vnoise(vWPos.xz * 0.35);
+float m2 = vnoise(vWPos.xz * 1.9 + 13.0);
+vec3 gBase = diffuseColor.rgb * (0.9 + 0.12 * m1 + 0.06 * m2);
+// hilltops catch more light, hollows hold shade
+gBase *= 0.9 + clamp(vWPos.y, -2.0, 6.0) * 0.03;
+// steep banks show bare earth
+float slope = 1.0 - clamp(vWNorm.y, 0.0, 1.0);
+gBase = mix(gBase, vec3(0.2, 0.14, 0.09), smoothstep(0.1, 0.32, slope) * 0.8);
+vec3 gCol = territory(gBase, fd);
+// no man's land: churned mud where the lines meet
+float mudW = 3.8 + 2.2 * vnoise(vec2(vWPos.z * 0.12, 3.1));
+float mud = 1.0 - smoothstep(mudW * 0.45, mudW, abs(fd) + (m1 - 0.5) * 2.2);
+gCol = mix(gCol, vec3(0.1, 0.07, 0.045) * (0.7 + 0.6 * m2), mud * 0.9);
 float bBull = (1.0 - smoothstep(0.0, uBufBull, fd)) * step(0.0, fd);
 float bBear = (1.0 - smoothstep(0.0, uBufBear, -fd)) * step(fd, 0.0);
-gCol = mix(gCol, vec3(0.42, 0.85, 0.46), bBull * 0.3);
-gCol = mix(gCol, vec3(0.9, 0.36, 0.3), bBear * 0.3);
+gCol = mix(gCol, vec3(0.42, 0.85, 0.46), bBull * 0.28);
+gCol = mix(gCol, vec3(0.9, 0.36, 0.3), bBear * 0.28);
 vec2 bUv = vec2((vWPos.x - uBoard.x) / uBoard.z, 1.0 - (vWPos.z - uBoard.y) / uBoard.w);
 vec4 mk = texture2D(uMarkers, bUv);
 gCol = mix(gCol, mk.rgb, mk.a);
 vec4 sc = texture2D(uScorch, bUv);
 gCol = mix(gCol, sc.rgb, sc.a);
+gCol *= 1.0 - cloudShade(vWPos.xz, uTime) * 0.32;
 diffuseColor.rgb = gCol;`
 			)
 			.replace(
@@ -199,6 +239,17 @@ diffuseColor.rgb = gCol;`
 totalEmissiveRadiance += vec3(0.78, 1.0, 0.86) * (exp(-abs(fd) / 0.3) * 1.5 + exp(-abs(fd) / 2.6) * 0.07);`
 			);
 	};
+}
+
+/** The height field as a texture, so the water shader knows its depth. */
+export function heightTexture(): THREE.DataTexture {
+	const data = new Uint16Array(GW * GD);
+	for (let i = 0; i < data.length; i++) data[i] = THREE.DataUtils.toHalfFloat(grid[i]);
+	const t = new THREE.DataTexture(data, GW, GD, THREE.RedFormat, THREE.HalfFloatType);
+	t.magFilter = THREE.LinearFilter;
+	t.minFilter = THREE.LinearFilter;
+	t.needsUpdate = true;
+	return t;
 }
 
 // ── paint layers ──────────────────────────────────────────────────────────
@@ -317,6 +368,18 @@ export class ScorchPaint {
 		this.dirty = true;
 	}
 
+	/** Tank treads: a pair of short dark marks under the tracks, heading `rot`. */
+	track(x: number, z: number, rot: number) {
+		const { ctx, s } = this;
+		ctx.save();
+		ctx.translate((x - MINX) * s, (z - MINZ) * s);
+		ctx.rotate(-rot);
+		ctx.fillStyle = 'rgba(38, 30, 20, 0.32)';
+		for (const side of [-1.24, 1.24]) ctx.fillRect(-0.45 * s, side * s - 0.28 * s, 0.9 * s, 0.56 * s);
+		ctx.restore();
+		this.dirty = true;
+	}
+
 	clear() {
 		this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 		this.dirty = true;
@@ -369,26 +432,47 @@ export function buildGround(u: GroundUniforms): THREE.Mesh {
 	return m;
 }
 
-/** The slab's cut earth sides + the dark table it sits on. */
+/** The slab's cut sides — a grass lip over bands of soil, clay and rock — and the dark table it sits on. */
 export function buildSlab(): THREE.Group {
 	const group = new THREE.Group();
 	const pos: number[] = [];
 	const col: number[] = [];
-	const top = new THREE.Color('#4e3c28');
-	const bot = new THREE.Color('#161109');
+	// strata from the surface down: depth below the local ground, and colour
+	const bands: [number, THREE.Color][] = [
+		[0, srgb(0.3, 0.42, 0.18)],
+		[0.8, srgb(0.24, 0.3, 0.13)],
+		[1.1, srgb(0.29, 0.21, 0.13)],
+		[3.4, srgb(0.36, 0.26, 0.16)],
+		[6.2, srgb(0.47, 0.32, 0.19)],
+		[9.5, srgb(0.4, 0.38, 0.35)],
+		[13, srgb(0.27, 0.26, 0.24)]
+	];
+	const c = new THREE.Color();
 	const edge = (pts: [number, number][]) => {
 		for (let i = 0; i < pts.length - 1; i++) {
 			const [x0, z0] = pts[i];
 			const [x1, z1] = pts[i + 1];
 			const h0 = heightAt(x0, z0);
 			const h1 = heightAt(x1, z1);
-			const quad = [
-				[x0, h0, z0, top], [x0, SLAB_Y, z0, bot], [x1, h1, z1, top],
-				[x1, h1, z1, top], [x0, SLAB_Y, z0, bot], [x1, SLAB_Y, z1, bot]
-			] as const;
-			for (const [x, y, z, c] of quad) {
-				pos.push(x, y, z);
-				col.push(c.r, c.g, c.b);
+			// each column gets a little colour jitter so the bands read as rock, not stripes
+			const j0 = 0.9 + 0.2 * (noise(x0 * 0.3 + z0 * 0.3, 1.7) * 0.5 + 0.5);
+			const j1 = 0.9 + 0.2 * (noise(x1 * 0.3 + z1 * 0.3, 1.7) * 0.5 + 0.5);
+			const level = (h: number, k: number) => Math.max(SLAB_Y, k < bands.length ? h - bands[k][0] : SLAB_Y);
+			for (let k = 0; k < bands.length; k++) {
+				const ya0 = level(h0, k), yb0 = level(h0, k + 1);
+				const ya1 = level(h1, k), yb1 = level(h1, k + 1);
+				if (ya0 <= SLAB_Y && ya1 <= SLAB_Y) break;
+				const ca = bands[k][1];
+				const cb = bands[Math.min(k + 1, bands.length - 1)][1];
+				const quad = [
+					[x0, ya0, z0, ca, j0], [x0, yb0, z0, cb, j0], [x1, ya1, z1, ca, j1],
+					[x1, ya1, z1, ca, j1], [x0, yb0, z0, cb, j0], [x1, yb1, z1, cb, j1]
+				] as const;
+				for (const [x, y, z, cc, j] of quad) {
+					pos.push(x, y, z);
+					c.copy(cc).multiplyScalar(j * (0.55 + 0.45 * Math.min(1, (y - SLAB_Y) / 8)));
+					col.push(c.r, c.g, c.b);
+				}
 			}
 		}
 	};
@@ -413,10 +497,16 @@ export function buildSlab(): THREE.Group {
 	g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
 	g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
 	g.computeVertexNormals();
-	const sides = new THREE.Mesh(
-		g,
-		new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide })
-	);
+	const sideMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide, flatShading: true });
+	// the sides the camera sees face away from the sun: let the strata glow a little so they still read
+	sideMat.onBeforeCompile = (s) => {
+		s.fragmentShader = s.fragmentShader.replace(
+			'#include <emissivemap_fragment>',
+			'#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.42;'
+		);
+	};
+	const sides = new THREE.Mesh(g, sideMat);
+	sides.receiveShadow = true;
 	group.add(sides);
 
 	const table = new THREE.Mesh(
@@ -429,17 +519,66 @@ export function buildSlab(): THREE.Group {
 	return group;
 }
 
-export function buildWater(): THREE.Group {
+/** Lakes: depth-tinted from the height field, rippling, foaming at the shore, under the same clouds. */
+export function buildWater(uTime: { value: number }): THREE.Group {
 	const group = new THREE.Group();
 	const mat = new THREE.MeshStandardMaterial({
-		color: '#2f7fe0',
-		emissive: '#0b2c63',
-		emissiveIntensity: 0.6,
-		roughness: 0.12,
-		metalness: 0.05,
-		transparent: true,
-		opacity: 0.93
+		color: '#ffffff',
+		roughness: 0.08,
+		metalness: 0.1,
+		transparent: true
 	});
+	const hTex = heightTexture();
+	mat.onBeforeCompile = (s) => {
+		Object.assign(s.uniforms, {
+			uTime,
+			uHeight: { value: hTex },
+			uBoard: { value: new THREE.Vector4(MINX, MINZ, W, D) },
+			uWaterY: { value: WATER_Y }
+		});
+		s.vertexShader = s.vertexShader
+			.replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+			.replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+		s.fragmentShader = s.fragmentShader
+			.replace(
+				'#include <common>',
+				`#include <common>
+varying vec3 vWPos;
+uniform float uTime, uWaterY;
+uniform sampler2D uHeight;
+uniform vec4 uBoard;
+${NOISE_GLSL}`
+			)
+			.replace(
+				'#include <color_fragment>',
+				`#include <color_fragment>
+vec2 hUv = vec2((vWPos.x - uBoard.x + 0.5) / (uBoard.z + 1.0), (vWPos.z - uBoard.y + 0.5) / (uBoard.w + 1.0));
+float wDepth = uWaterY - texture2D(uHeight, hUv).r;
+vec3 wCol = mix(vec3(0.13, 0.46, 0.62), vec3(0.02, 0.13, 0.36), smoothstep(0.2, 2.6, wDepth));
+float foamN = vnoise(vWPos.xz * 0.9 + vec2(uTime * 0.35, -uTime * 0.2));
+float foam = 1.0 - smoothstep(0.0, 0.5, wDepth + (foamN - 0.5) * 0.35);
+foam += (1.0 - smoothstep(0.0, 0.08, abs(wDepth - 0.55 - 0.12 * sin(uTime * 1.3)))) * 0.35;
+wCol = mix(wCol, vec3(0.93, 0.95, 0.94), clamp(foam, 0.0, 1.0) * 0.85);
+wCol *= 1.0 - cloudShade(vWPos.xz, uTime) * 0.3;
+diffuseColor.rgb = wCol;
+diffuseColor.a = mix(0.72, 0.95, smoothstep(0.0, 1.2, wDepth));`
+			)
+			.replace(
+				'#include <normal_fragment_maps>',
+				`#include <normal_fragment_maps>
+vec2 wq = vWPos.xz * 0.42 + vec2(uTime * 0.33, uTime * 0.21);
+float w0 = vnoise(wq), wx = vnoise(wq + vec2(0.3, 0.0)), wz = vnoise(wq + vec2(0.0, 0.3));
+vec2 wq2 = vWPos.xz * 1.1 - vec2(uTime * 0.5, uTime * 0.12);
+float v0 = vnoise(wq2), vx = vnoise(wq2 + vec2(0.3, 0.0)), vz = vnoise(wq2 + vec2(0.0, 0.3));
+vec3 wn = normalize(vec3((w0 - wx) * 1.4 + (v0 - vx) * 0.7, 1.0, (w0 - wz) * 1.4 + (v0 - vz) * 0.7));
+normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);`
+			)
+			.replace(
+				'#include <emissivemap_fragment>',
+				`#include <emissivemap_fragment>
+totalEmissiveRadiance += vec3(0.01, 0.05, 0.12);`
+			);
+	};
 	for (const l of LAKES) {
 		// a rectangle over the basin, clipped to the board so it never pokes out of the slab
 		const R = l.r * 1.8;

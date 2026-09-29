@@ -45,6 +45,7 @@ type Tank = {
 	side: number; x: number; z: number; y: number; rot: number; tur: number;
 	slotD: number; slotZ: number; wreck: boolean; fireT: number; t: number; recoil: number;
 	aimX: number; aimZ: number; aiming: number; // seconds spent laying the gun, -1 = idle
+	trail: number; // distance since the last tread mark
 };
 type Launcher = {
 	side: number; x: number; z: number; y: number; rot: number; slotD: number; slotZ: number;
@@ -54,6 +55,7 @@ type Launcher = {
 export type ArmyHooks = {
 	shot(x: number, z: number): void;
 	cannon(x: number, z: number): void;
+	track(x: number, z: number, rot: number): void;
 };
 
 export class Army {
@@ -284,6 +286,8 @@ export class Army {
 	impact(x: number, z: number, scale: number, victims: number) {
 		this.fx.explode(x, heightAt(x, z), z, scale);
 		this.blast(x, z, 1.8 + 2.2 * scale, Math.min(0.95, 0.35 + 0.3 * scale), victims);
+		// heavy ordnance sets the ground alight
+		if (scale >= 1.4 && Math.random() < 0.55) this.fx.burn(x, z, 0.6 + 0.4 * scale, rand(7, 14));
 	}
 
 	/** Kill / fling everything of side `victims` (-1 = any) inside radius r. */
@@ -384,7 +388,7 @@ export class Army {
 		const rot = s === BULL ? Math.PI : 0;
 		this.tanks.push({
 			side: s, x: cx, z: slotZ, y: heightAt(cx, slotZ), rot, tur: rot, slotD, slotZ,
-			wreck: false, fireT: rand(1, 5), t: 0, recoil: 0, aimX: cx - DIR[s] * 20, aimZ: slotZ, aiming: -1
+			wreck: false, fireT: rand(1, 5), t: 0, recoil: 0, aimX: cx - DIR[s] * 20, aimZ: slotZ, aiming: -1, trail: 0
 		});
 	}
 
@@ -639,6 +643,12 @@ export class Army {
 				t.z += (dz / dist) * step;
 				t.rot += wrapAngle(Math.atan2(-dz, dx) - t.rot) * Math.min(1, dt * 3);
 				if (Math.random() < dt * 4) this.fx.dust(t.x - Math.cos(t.rot) * 2.4, t.y + 0.3, t.z + Math.sin(t.rot) * 2.4, 0.9);
+				// treads print into the dirt every metre or so
+				t.trail += step;
+				if (t.trail > 0.9) {
+					t.trail = 0;
+					this.hooks.track(t.x, t.z, t.rot);
+				}
 			} else {
 				t.rot += wrapAngle((t.side === BULL ? Math.PI : 0) - t.rot) * Math.min(1, dt * 1.5);
 			}
