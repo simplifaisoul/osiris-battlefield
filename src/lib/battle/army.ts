@@ -18,6 +18,7 @@ export const DIR = [1, -1] as const;
 export const TEAM = [new THREE.Color('#6fe38c'), new THREE.Color('#e5463f')];
 const ARMOR = [new THREE.Color('#86e8a2'), new THREE.Color('#ee6f66')];
 const TRUCK = [new THREE.Color('#4fae68'), new THREE.Color('#c9544c')];
+const GOLD = new THREE.Color('#ffc93c'); // a tracked wallet's units
 const TRACER = [
 	[1.2, 2.8, 1.3],
 	[3.0, 1.4, 0.7]
@@ -46,7 +47,22 @@ type Tank = {
 	slotD: number; slotZ: number; wreck: boolean; fireT: number; t: number; recoil: number;
 	aimX: number; aimZ: number; aiming: number; // seconds spent laying the gun, -1 = idle
 	trail: number; // distance since the last tread mark
+	idn: number; kills: number; bornAt: number; bornFront: number; // its commander and record
 };
+
+export type Pick = { kind: 'soldier'; i: number; gen: number } | { kind: 'tank'; tank: Tank };
+export type UnitInfo = {
+	kind: 'soldier' | 'tank';
+	side: number;
+	wallet: string | null;
+	alive: boolean;
+	x: number; y: number; z: number;
+	kills: number;
+	bornAt: number;
+	bornFront: number;
+};
+/** Who gets the credit for a blast's kills. */
+type Credit = { side: number; idn: number; tank?: Tank };
 type Launcher = {
 	side: number; x: number; z: number; y: number; rot: number; slotD: number; slotZ: number;
 	wreck: boolean; fireT: number; t: number; salvo: number; salvoT: number;
@@ -89,6 +105,23 @@ export class Army {
 	private pose = new Uint8Array(CAP);
 	private free: number[] = [];
 	private poses: THREE.InstancedMesh[][] = [[], []];
+
+	// who each unit is: an index into its side's roster of wallets (-1 = anonymous conscript)
+	private idn = new Int32Array(CAP).fill(-1);
+	private kills = new Uint16Array(CAP);
+	private bornAt = new Float64Array(CAP); // wall-clock ms it took the field
+	private bornFront = new Float64Array(CAP); // the price / market cap it took the field at
+	/** The live battle value, kept current by the engine: stamped on every unit as it deploys. */
+	price = 0;
+	private roster: [string[], string[]] = [[], []];
+	private rosterIdx: [Map<string, number>, Map<string, number>] = [new Map(), new Map()];
+	private order: [number[], number[]] = [[], []]; // identities in deployment priority (biggest holders first)
+	private fielded: [number[], number[]] = [[], []];
+	private unitKills: [number[], number[]] = [[], []];
+	private unitDeaths: [number[], number[]] = [[], []];
+	/** Identity per side drawn in gold (a tracked wallet). */
+	tracked: [number, number] = [-1, -1];
+	private pv = new THREE.Vector3();
 
 	// targeting bins (front-line soldiers by z)
 	private binStart = [new Int32Array(NBINS + 1), new Int32Array(NBINS + 1)];
@@ -176,6 +209,141 @@ export class Army {
 		return this.ft[k] + (this.ft[k + 1] - this.ft[k]) * (f - k);
 	}
 
+	// ── identities ─────────────────────────────────────────────────────
+
+	/** The identity index for a wallet on side s, enlisting it if new. */
+	idFor(s: number, wallet: string): number {
+		let k = this.rosterIdx[s].get(wallet);
+		if (k === undefined) {
+			k = this.roster[s].length;
+			this.roster[s].push(wallet);
+			this.rosterIdx[s].set(wallet, k);
+			this.fielded[s].push(0);
+			this.unitKills[s].push(0);
+			this.unitDeaths[s].push(0);
+		}
+		return k;
+	}
+
+	/** Set who deploys first on side s: wallets in priority order (the roster only ever grows). */
+	setRoster(s: number, wallets: string[]) {
+		this.order[s] = wallets.map((w) => this.idFor(s, w));
+		// anonymous soldiers already in the line take up the unclaimed names
+		for (let i = 0; i < CAP; i++) {
+			if (this.side[i] !== s || this.idn[i] >= 0 || (this.st[i] !== HOLD && this.st[i] !== MARCH)) continue;
+			const k = this.nextIdentity(s);
+			if (k < 0) break;
+			this.idn[i] = k;
+			this.fielded[s][k]++;
+		}
+		for (const t of this.tanks) if (t.side === s && t.idn < 0 && !t.wreck) t.idn = this.tankCommander(s);
+	}
+
+	walletOf(s: number, k: number): string | null {
+		return k >= 0 ? (this.roster[s][k] ?? null) : null;
+	}
+
+	/** The highest-priority identity with nobody on the field. */
+	private nextIdentity(s: number): number {
+		for (const k of this.order[s]) if (this.fielded[s][k] === 0) return k;
+		return -1;
+	}
+
+	private enlist(i: number, s: number, k: number) {
+		this.idn[i] = k;
+		this.kills[i] = 0;
+		this.bornAt[i] = Date.now();
+		this.bornFront[i] = this.price;
+		if (k >= 0) this.fielded[s][k]++;
+	}
+
+	/** A wallet's record across both sides this session. */
+	record(wallet: string) {
+		const out = { soldiers: 0, tanks: 0, kills: 0, deaths: 0 };
+		for (const s of [BULL, BEAR]) {
+			const k = this.rosterIdx[s].get(wallet);
+			if (k === undefined) continue;
+			out.soldiers += this.fielded[s][k];
+			out.kills += this.unitKills[s][k];
+			out.deaths += this.unitDeaths[s][k];
+			for (const t of this.tanks) if (t.side === s && t.idn === k && !t.wreck) out.tanks++;
+		}
+		return out;
+	}
+
+	/** One of a wallet's units on the field (its tank if it commands one), or null. */
+	unitOf(wallet: string): Pick | null {
+		for (const s of [BULL, BEAR]) {
+			const k = this.rosterIdx[s].get(wallet);
+			if (k === undefined) continue;
+			const t = this.tanks.find((t) => t.side === s && t.idn === k && !t.wreck);
+			if (t) return { kind: 'tank', tank: t };
+			for (let i = 0; i < CAP; i++) {
+				if (this.side[i] === s && this.idn[i] === k && (this.st[i] === HOLD || this.st[i] === MARCH)) return { kind: 'soldier', i, gen: this.gen[i] };
+			}
+		}
+		return null;
+	}
+
+	/** Gold-highlight every unit of a wallet (null clears). */
+	track(wallet: string | null) {
+		for (const s of [BULL, BEAR]) this.tracked[s] = wallet ? (this.rosterIdx[s].get(wallet) ?? -1) : -1;
+	}
+
+	/** The unit nearest a screen point (px, py) within a few pixels, if any. */
+	pick(cam: THREE.Camera, px: number, py: number, w: number, h: number): Pick | null {
+		let best: Pick | null = null;
+		let bestD = 26 * 26;
+		for (const t of this.tanks) {
+			const d = this.screenDist(cam, t.x, t.y + 1.4, t.z, px, py, w, h);
+			if (d < bestD) {
+				bestD = d;
+				best = { kind: 'tank', tank: t };
+			}
+		}
+		if (best) return best;
+		bestD = 16 * 16;
+		for (let i = 0; i < CAP; i++) {
+			const st = this.st[i];
+			if (st === FREE) continue;
+			const d = this.screenDist(cam, this.x[i], this.y[i] + 0.9, this.z[i], px, py, w, h);
+			// the living win ties over the fallen
+			if (d < bestD || (best?.kind === 'soldier' && d < bestD * 1.5 && st <= HOLD && this.st[best.i] > HOLD)) {
+				bestD = d;
+				best = { kind: 'soldier', i, gen: this.gen[i] };
+			}
+		}
+		return best;
+	}
+
+	private screenDist(cam: THREE.Camera, x: number, y: number, z: number, px: number, py: number, w: number, h: number) {
+		const v = this.pv.set(x, y, z).project(cam);
+		if (v.z > 1) return Infinity;
+		const sx = ((v.x + 1) / 2) * w - px;
+		const sy = ((1 - v.y) / 2) * h - py;
+		return sx * sx + sy * sy;
+	}
+
+	/** Live facts about a picked unit, or null once it's gone from the field. */
+	info(p: Pick): UnitInfo | null {
+		if (p.kind === 'tank') {
+			const t = p.tank;
+			if (!this.tanks.includes(t)) return null;
+			return {
+				kind: 'tank', side: t.side, wallet: this.walletOf(t.side, t.idn), alive: !t.wreck,
+				x: t.x, y: t.y, z: t.z, kills: t.kills, bornAt: t.bornAt, bornFront: t.bornFront
+			};
+		}
+		const i = p.i;
+		if (this.gen[i] !== p.gen || this.st[i] === FREE) return null;
+		const st = this.st[i];
+		return {
+			kind: 'soldier', side: this.side[i], wallet: this.walletOf(this.side[i], this.idn[i]),
+			alive: st === HOLD || st === MARCH, x: this.x[i], y: this.y[i], z: this.z[i],
+			kills: this.kills[i], bornAt: this.bornAt[i], bornFront: this.bornFront[i]
+		};
+	}
+
 	// ── lifecycle ──────────────────────────────────────────────────────
 
 	clear() {
@@ -184,6 +352,7 @@ export class Army {
 			this.st[i] = FREE;
 			this.free.push(i);
 		}
+		for (const s of [BULL, BEAR]) this.fielded[s].fill(0);
 		this.tanks.length = 0;
 		this.launchers.length = 0;
 		this.sk.age.fill(999);
@@ -196,6 +365,7 @@ export class Army {
 			for (let k = 0; k < this.targets.inf[s]; k++) {
 				const i = this.spawn(s, 0, 0, HOLD);
 				if (i < 0) break;
+				this.enlist(i, s, this.nextIdentity(s));
 				const tz = this.slotZ[i];
 				this.x[i] = this.frontAt(tz) + DIR[s] * this.slotD[i];
 				this.z[i] = tz;
@@ -232,22 +402,24 @@ export class Army {
 		this.slotZ[i] = this.z[i];
 	}
 
-	/** Reinforcements for a trade: a squad double-times in from behind the line. */
-	squad(s: number, n: number) {
+	/** Reinforcements for a trade: a squad double-times in from behind the line, carrying the trader's colours. */
+	squad(s: number, n: number, wallet?: string) {
+		const who = wallet ? this.idFor(s, wallet) : -1;
 		const cz = rand(MINZ + 30, MAXZ - 30);
 		for (let k = 0; k < n; k++) {
 			const z = cz + rand(-12, 12);
 			const x = Math.min(MAXX - 8, Math.max(MINX + 8, this.frontAt(z) + DIR[s] * rand(40, 56)));
 			const i = this.spawn(s, x, z, MARCH);
 			if (i < 0) return;
+			this.enlist(i, s, who);
 			// fan out along the line rather than piling onto one spot
 			this.slotZ[i] = Math.min(MAXZ - 8, Math.max(MINZ + 8, cz + rand(-22, 22)));
 			this.slotD[i] = rand(0.9, 12);
 		}
 	}
 
-	deployTank(s: number) {
-		if (this.tanks.filter((t) => t.side === s && !t.wreck).length < MAX_TANKS) this.addTank(s, false);
+	deployTank(s: number, wallet?: string) {
+		if (this.tanks.filter((t) => t.side === s && !t.wreck).length < MAX_TANKS) this.addTank(s, false, wallet ? this.idFor(s, wallet) : undefined);
 	}
 
 	/** An immediate artillery salvo from `s` (smaller liquidations). */
@@ -283,15 +455,15 @@ export class Army {
 		return { x: this.frontAt(z) + DIR[s] * rand(3, 12), z };
 	}
 
-	impact(x: number, z: number, scale: number, victims: number) {
+	impact(x: number, z: number, scale: number, victims: number, credit?: Credit) {
 		this.fx.explode(x, heightAt(x, z), z, scale);
-		this.blast(x, z, 1.8 + 2.2 * scale, Math.min(0.95, 0.35 + 0.3 * scale), victims);
+		this.blast(x, z, 1.8 + 2.2 * scale, Math.min(0.95, 0.35 + 0.3 * scale), victims, credit);
 		// heavy ordnance sets the ground alight
 		if (scale >= 1.4 && Math.random() < 0.55) this.fx.burn(x, z, 0.6 + 0.4 * scale, rand(7, 14));
 	}
 
 	/** Kill / fling everything of side `victims` (-1 = any) inside radius r. */
-	blast(x: number, z: number, r: number, power: number, victims: number): number {
+	blast(x: number, z: number, r: number, power: number, victims: number, credit?: Credit): number {
 		const r2 = r * r;
 		let kills = 0;
 		for (let i = 0; i < CAP; i++) {
@@ -320,6 +492,10 @@ export class Army {
 				this.fx.explode(l.x, l.y + 1, l.z, 1.1, false);
 			}
 		}
+		if (credit && kills) {
+			if (credit.idn >= 0) this.unitKills[credit.side][credit.idn] += kills;
+			if (credit.tank) credit.tank.kills += kills;
+		}
 		return kills;
 	}
 
@@ -334,6 +510,12 @@ export class Army {
 	private kill(i: number, fromX?: number, fromZ?: number, power = 1) {
 		const s = this.side[i];
 		this.casualties[s]++;
+		const k = this.idn[i];
+		if (k >= 0) {
+			// the wallet takes the loss, and is free to redeploy with the next reinforcements
+			this.unitDeaths[s][k]++;
+			this.fielded[s][k] = Math.max(0, this.fielded[s][k] - 1);
+		}
 		this.t[i] = 0;
 		this.fall[i] = Math.random() < 0.5 ? 1 : -1;
 		if (fromX !== undefined && fromZ !== undefined) {
@@ -380,7 +562,13 @@ export class Army {
 		return best;
 	}
 
-	private addTank(s: number, inPlace: boolean) {
+	/** The biggest wallet on side s not already commanding a tank: whales ride in armour. */
+	private tankCommander(s: number): number {
+		for (const k of this.order[s].slice(0, 24)) if (!this.tanks.some((t) => t.side === s && t.idn === k && !t.wreck)) return k;
+		return -1;
+	}
+
+	private addTank(s: number, inPlace: boolean, idn?: number) {
 		const slotZ = this.spreadSlot(this.tanks, s);
 		const slotD = rand(4.5, 15);
 		const x = inPlace ? this.frontAt(slotZ) + DIR[s] * slotD : this.frontAt(slotZ) + DIR[s] * rand(85, 120);
@@ -388,7 +576,8 @@ export class Army {
 		const rot = s === BULL ? Math.PI : 0;
 		this.tanks.push({
 			side: s, x: cx, z: slotZ, y: heightAt(cx, slotZ), rot, tur: rot, slotD, slotZ,
-			wreck: false, fireT: rand(1, 5), t: 0, recoil: 0, aimX: cx - DIR[s] * 20, aimZ: slotZ, aiming: -1, trail: 0
+			wreck: false, fireT: rand(1, 5), t: 0, recoil: 0, aimX: cx - DIR[s] * 20, aimZ: slotZ, aiming: -1, trail: 0,
+			idn: idn ?? this.tankCommander(s), kills: 0, bornAt: Date.now(), bornFront: this.price
 		});
 	}
 
@@ -406,6 +595,7 @@ export class Army {
 	private wreckTank(t: Tank) {
 		t.wreck = true;
 		t.t = 0;
+		if (t.idn >= 0) this.unitDeaths[t.side][t.idn]++;
 		this.fx.explode(t.x, t.y + 1.2, t.z, 1.2, false);
 	}
 
@@ -487,6 +677,8 @@ export class Army {
 		const my = this.y[i] + (this.kneel[i] ? 1.13 : 1.43);
 		this.fx.muzzle(mx, my, mz, 0.9);
 		const g = this.gen[j];
+		const shooterGen = this.gen[i];
+		const shooterId = this.idn[i];
 		const hit = Math.random() < this.pHit[s];
 		const c = TRACER[s];
 		this.fx.tracer(
@@ -495,7 +687,11 @@ export class Army {
 			c[0], c[1], c[2], 170, 2.6, 0.085,
 			hit
 				? () => {
-						if (this.gen[j] === g && (this.st[j] === HOLD || this.st[j] === MARCH)) this.kill(j);
+						if (this.gen[j] !== g || (this.st[j] !== HOLD && this.st[j] !== MARCH)) return;
+						this.kill(j);
+						// credit the rifleman, and the wallet it fights for
+						if (this.gen[i] === shooterGen) this.kills[i]++;
+						if (shooterId >= 0) this.unitKills[s][shooterId]++;
 					}
 				: undefined
 		);
@@ -593,6 +789,7 @@ export class Army {
 				const x = Math.min(MAXX - 8, Math.max(MINX + 8, this.frontAt(z) + DIR[s] * rand(55, 110)));
 				const i = this.spawn(s, x, z, MARCH);
 				if (i < 0) break;
+				this.enlist(i, s, this.nextIdentity(s));
 				this.slotZ[i] = Math.min(MAXZ - 8, Math.max(MINZ + 8, z + rand(-25, 25)));
 			}
 		}
@@ -683,7 +880,8 @@ export class Army {
 					this.fx.puff(mx, my, mz, 1.1, 0.62, 0.5, 1.6);
 					t.recoil = 1;
 					const side = t.side;
-					this.fx.tracer(mx, my, mz, tx2, heightAt(tx2, tz2) + 0.4, tz2, 3.2, 2.5, 1.3, 260, 5, 0.17, () => this.impact(tx2, tz2, 0.5, 1 - side));
+					const credit = { side, idn: t.idn, tank: t };
+					this.fx.tracer(mx, my, mz, tx2, heightAt(tx2, tz2) + 0.4, tz2, 3.2, 2.5, 1.3, 260, 5, 0.17, () => this.impact(tx2, tz2, 0.5, 1 - side, credit));
 					this.hooks.cannon(mx, mz);
 					t.fireT = rand(3.5, 7.5) * (1 - 0.4 * vol);
 					t.aiming = -1;
@@ -772,7 +970,8 @@ export class Army {
 			const k = counts[s][p]++;
 			const te = mesh.instanceMatrix.array as Float32Array;
 			const o = k * 16;
-			const sc = 0.94 + this.shade[i] * 0.12;
+			const gold = this.idn[i] >= 0 && this.idn[i] === this.tracked[s];
+			const sc = (0.94 + this.shade[i] * 0.12) * (gold ? 1.3 : 1);
 			const c = Math.cos(this.rot[i]);
 			const sn = Math.sin(this.rot[i]);
 			let a = 0;
@@ -790,9 +989,10 @@ export class Army {
 			te[o + 15] = 1;
 			const col = mesh.instanceColor!.array as Float32Array;
 			const f = (0.86 + this.shade[i] * 0.2) * (upright ? 1 : 0.55);
-			col[k * 3] = TEAM[s].r * f;
-			col[k * 3 + 1] = TEAM[s].g * f;
-			col[k * 3 + 2] = TEAM[s].b * f;
+			const tc = gold ? GOLD : TEAM[s];
+			col[k * 3] = tc.r * f;
+			col[k * 3 + 1] = tc.g * f;
+			col[k * 3 + 2] = tc.b * f;
 		}
 		for (const s of [BULL, BEAR]) {
 			for (let p = 0; p < 3; p++) {
@@ -813,7 +1013,7 @@ export class Army {
 			const back = t.recoil * 0.35;
 			mtx.makeRotationY(t.tur).setPosition(t.x - Math.cos(t.tur) * back, t.y, t.z + Math.sin(t.tur) * back);
 			this.turret[s].setMatrixAt(k, mtx);
-			this.tmpC.copy(ARMOR[s]).multiplyScalar(t.wreck ? 0.18 : 1);
+			this.tmpC.copy(t.idn >= 0 && t.idn === this.tracked[s] ? GOLD : ARMOR[s]).multiplyScalar(t.wreck ? 0.18 : 1);
 			this.hull[s].setColorAt(k, this.tmpC);
 			this.turret[s].setColorAt(k, this.tmpC);
 		}

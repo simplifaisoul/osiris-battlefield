@@ -24,6 +24,12 @@ export class CameraRig {
 	private ray = new THREE.Raycaster();
 	private plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 	private listeners: [EventTarget, string, EventListener, AddEventListenerOptions?][] = [];
+	private tap: { x: number; y: number; t: number; moved: number } | null = null;
+	/** A click that wasn't a drag, in canvas pixels. */
+	onTap: ((x: number, y: number) => void) | null = null;
+	/** While set, the camera rides along over this point; any pan by hand lets go. */
+	follow: THREE.Vector3 | null = null;
+	onFollowEnd: (() => void) | null = null;
 
 	constructor(private el: HTMLElement) {
 		this.camera = new THREE.PerspectiveCamera(34, 1, 1, 6000);
@@ -60,6 +66,11 @@ export class CameraRig {
 		this.lastInput = -1e9;
 	}
 
+	/** Ease in (never out) to at most `dist`. */
+	zoomTo(dist: number) {
+		this.goal.dist = Math.min(this.goal.dist, dist);
+	}
+
 	jolt(amount: number) {
 		this.shake = Math.min(3, this.shake + amount);
 	}
@@ -81,7 +92,9 @@ export class CameraRig {
 		if (this.pointers.size === 1) {
 			const rotate = e.button === 2 || e.ctrlKey || e.shiftKey;
 			this.drag = { mode: rotate ? 'rotate' : 'pan', x: e.clientX, y: e.clientY };
+			this.tap = e.button === 0 ? { x: e.clientX, y: e.clientY, t: performance.now(), moved: 0 } : null;
 		} else if (this.pointers.size === 2) {
+			this.tap = null;
 			this.drag = null;
 			const [a, b] = [...this.pointers.values()];
 			this.pinch = Math.hypot(a.x - b.x, a.y - b.y);
@@ -96,6 +109,9 @@ export class CameraRig {
 		const dy = e.clientY - p.y;
 		p.x = e.clientX;
 		p.y = e.clientY;
+		if (this.tap) this.tap.moved += Math.abs(dx) + Math.abs(dy);
+		// a deliberate drag of the map lets go of whatever the camera was following
+		if (this.follow && this.drag?.mode === 'pan' && (this.tap?.moved ?? 99) > 6) this.release();
 		if (this.pointers.size === 2) {
 			const [a, b] = [...this.pointers.values()];
 			const d = Math.hypot(a.x - b.x, a.y - b.y);
@@ -111,9 +127,20 @@ export class CameraRig {
 	}
 
 	private up(e: PointerEvent) {
+		const wasTap = this.tap && this.pointers.size === 1 && this.tap.moved < 6 && performance.now() - this.tap.t < 450;
 		this.pointers.delete(e.pointerId);
 		if (this.pointers.size < 2) this.pinch = 0;
 		if (this.pointers.size === 0) this.drag = null;
+		if (wasTap && e.type === 'pointerup') {
+			const r = this.el.getBoundingClientRect();
+			this.onTap?.(e.clientX - r.left, e.clientY - r.top);
+		}
+		this.tap = null;
+	}
+
+	private release() {
+		this.follow = null;
+		this.onFollowEnd?.();
 	}
 
 	private wheel(e: WheelEvent) {
@@ -169,10 +196,18 @@ export class CameraRig {
 			if (k === 'q') g.yaw += dt * 1.2;
 			if (k === 'e') g.yaw -= dt * 1.2;
 		}
-		if (this.keys.size) this.touched();
+		if (this.keys.size) {
+			this.touched();
+			if (this.follow && [...this.keys].some((k) => k !== 'q' && k !== 'e')) this.release();
+		}
 
-		// idle: ease back onto the front line
-		if (performance.now() - this.lastInput > 14_000) {
+		if (this.follow) {
+			// ride along with the followed unit
+			g.target.x = this.follow.x;
+			g.target.z = this.follow.z;
+			this.touched();
+		} else if (performance.now() - this.lastInput > 14_000) {
+			// idle: ease back onto the front line
 			const k = 1 - Math.exp(-dt * 0.6);
 			g.target.x += (follow.x - g.target.x) * k;
 			g.target.z += (follow.z - g.target.z) * k;

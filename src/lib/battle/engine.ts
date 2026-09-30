@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { EffectComposer, RenderPass, EffectPass, BloomEffect, ToneMappingEffect, ToneMappingMode, VignetteEffect } from 'postprocessing';
 import * as W from './world';
 import { buildScenery, type Scenery } from './scenery';
-import { Army, BULL, BEAR, DIR } from './army';
+import { Army, BULL, BEAR, DIR, type Pick } from './army';
 import { Air, type StrikeKind } from './air';
 import { Fx } from './fx';
 import { Nukes } from './nuke';
@@ -22,7 +22,20 @@ export type RoundEvent =
 	| { type: 'new'; round: number; lo: number; hi: number; center: number }
 	| { type: 'win'; round: number; winner: Team; level: number };
 
+/** Live facts about the unit picked on the field. */
+export type Selected = {
+	kind: 'soldier' | 'tank';
+	team: Team;
+	wallet: string | null;
+	alive: boolean;
+	kills: number;
+	bornAt: number; // ms it took the field
+	bornFront: number; // price / market cap it took the field at
+	record: { soldiers: number; tanks: number; kills: number; deaths: number } | null; // its wallet, all units
+};
+
 export type BattleStats = {
+	selected: Selected | null;
 	fps: number;
 	soldiers: [number, number];
 	tanks: [number, number];
@@ -77,6 +90,8 @@ export class Battlefield {
 	private buf = [14, 14];
 	private scenery: Scenery;
 	private hazeT = 0;
+	private selected: Pick | null = null;
+	private marker = new THREE.Group();
 
 	private label: { mesh: THREE.Mesh; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture; text: string; at: number };
 	private signs: THREE.Sprite[] = [];
@@ -95,7 +110,13 @@ export class Battlefield {
 
 	constructor(
 		private canvas: HTMLCanvasElement,
-		private on: { round(e: RoundEvent): void; stats(s: BattleStats): void; flash(strength: number): void }
+		private on: {
+			round(e: RoundEvent): void;
+			stats(s: BattleStats): void;
+			flash(strength: number): void;
+			select(s: Selected | null): void;
+			followEnded(): void;
+		}
 	) {
 		this.mobile = matchMedia('(pointer: coarse)').matches || innerWidth < 760;
 		this.infantry = this.mobile ? 640 : 1150;
@@ -113,6 +134,12 @@ export class Battlefield {
 		this.scene.fog = new THREE.Fog(bg, 400, 1400);
 
 		this.rig = new CameraRig(canvas);
+		this.rig.onTap = (x, y) => {
+			const p = this.army.pick(this.rig.camera, x, y, canvas.clientWidth, canvas.clientHeight);
+			this.selected = p;
+			this.on.select(p ? this.describe(p) : null);
+		};
+		this.rig.onFollowEnd = () => this.on.followEnded();
 
 		// light: soft sky fill + a warm low sun from the upper left of the view
 		this.scene.add(new THREE.HemisphereLight('#dde8ff', '#4b3f2b', 1.2));
@@ -173,6 +200,15 @@ export class Battlefield {
 		this.label = this.makeLabel();
 		this.scene.add(this.label.mesh);
 
+		// the picked unit: a gold ring on the ground and a thin beam of light above it
+		const ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.8, 0.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+		this.marker.add(new THREE.Mesh(new THREE.RingGeometry(1.3, 1.7, 40).rotateX(-Math.PI / 2), ringMat));
+		const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 14, 6).translate(0, 7, 0), ringMat);
+		this.marker.add(beam);
+		this.marker.visible = false;
+		this.marker.renderOrder = 30;
+		this.scene.add(this.marker);
+
 		// post: HDR → bloom (fire, tracers, the front line) → tone map → vignette
 		this.composer = new EffectComposer(r, {
 			frameBufferType: THREE.HalfFloatType,
@@ -212,6 +248,8 @@ export class Battlefield {
 		this.fx.clear();
 		this.scorch.clear();
 		this.front = 0;
+		this.selected = null;
+		this.rig.follow = null;
 		this.markers.paint([], [], GROUND_FONT);
 		this.label.text = '';
 	}
@@ -246,11 +284,11 @@ export class Battlefield {
 	}
 
 	/** A trade reached the field: a fresh squad, and armour for a big one. */
-	reinforce(team: Team, soldiers: number, tank: boolean) {
+	reinforce(team: Team, soldiers: number, tank: boolean, wallet?: string) {
 		if (this.phase !== 'fight') return;
 		const s = team === 'bull' ? BULL : BEAR;
-		if (soldiers > 0) this.army.squad(s, soldiers);
-		if (tank) this.army.deployTank(s);
+		if (soldiers > 0) this.army.squad(s, soldiers, wallet);
+		if (tank) this.army.deployTank(s, wallet);
 	}
 
 	/** `attacker` flies the strike; it lands on the other side. */
@@ -283,7 +321,62 @@ export class Battlefield {
 	}
 
 	recenter() {
+		this.follow(false);
 		this.rig.recenter(new THREE.Vector3(this.front, 0, W.roadZ(this.front)));
+	}
+
+	/** Who deploys first on each side: wallets in priority order. Units draw identities from these. */
+	setRoster(bull: string[], bear: string[]) {
+		this.army.setRoster(BULL, bull);
+		this.army.setRoster(BEAR, bear);
+	}
+
+	/** Gold-highlight every unit of a wallet (null clears). Returns what it has on the field. */
+	track(wallet: string | null) {
+		this.army.track(wallet);
+		return wallet ? this.army.record(wallet) : null;
+	}
+
+	/** A wallet's units on the field and its kills / losses this session. */
+	record(wallet: string) {
+		return this.army.record(wallet);
+	}
+
+	/** Pick one of a wallet's units (soldier or tank) so the camera can find it. */
+	selectWallet(wallet: string): Selected | null {
+		const p = this.army.unitOf(wallet);
+		this.selected = p;
+		const d = p ? this.describe(p) : null;
+		this.on.select(d);
+		return d;
+	}
+
+	clearSelection() {
+		this.selected = null;
+		this.follow(false);
+		this.on.select(null);
+	}
+
+	/** Ride the camera along with the selected unit. */
+	follow(on: boolean) {
+		const info = on && this.selected ? this.army.info(this.selected) : null;
+		this.rig.follow = info ? new THREE.Vector3(info.x, 0, info.z) : null;
+		if (info) this.rig.zoomTo(90);
+	}
+
+	private describe(p: Pick): Selected | null {
+		const i = this.army.info(p);
+		if (!i) return null;
+		return {
+			kind: i.kind,
+			team: i.side === BULL ? 'bull' : 'bear',
+			wallet: i.wallet,
+			alive: i.alive,
+			kills: i.kills,
+			bornAt: i.bornAt,
+			bornFront: i.bornFront,
+			record: i.wallet ? this.army.record(i.wallet) : null
+		};
 	}
 
 	setSound(on: boolean) {
@@ -480,6 +573,7 @@ export class Battlefield {
 
 		this.army.front = this.front;
 		this.army.volatility = this.vol;
+		this.army.price = this.price;
 		if (this.phase !== 'idle') this.army.update(dt); // no one deploys before the first price
 		this.air.update(dt);
 		this.nukes.update(dt);
@@ -525,6 +619,19 @@ export class Battlefield {
 			pos.needsUpdate = true;
 		}
 
+		// keep the picked unit marked, and the follow cam on it
+		const sel = this.selected ? this.army.info(this.selected) : null;
+		this.marker.visible = !!sel;
+		if (sel) {
+			this.marker.position.set(sel.x, sel.y + 0.15, sel.z);
+			const pulse = 1 + Math.sin(now / 180) * 0.12;
+			this.marker.scale.set(pulse * (sel.kind === 'tank' ? 2.2 : 1), 1, pulse * (sel.kind === 'tank' ? 2.2 : 1));
+			if (this.rig.follow) this.rig.follow.set(sel.x, 0, sel.z);
+		} else if (this.rig.follow && this.selected) {
+			this.rig.follow = null;
+			this.on.followEnded();
+		}
+
 		if (now - this.statsAt > 500) {
 			this.statsAt = now;
 			const tanks: [number, number] = [0, 0];
@@ -537,7 +644,8 @@ export class Battlefield {
 				round: this.round,
 				wins: [this.wins[0], this.wins[1]],
 				phase: this.phase,
-				progress: this.hi > this.lo ? Math.min(1, Math.max(0, (this.price - this.lo) / (this.hi - this.lo))) : 0.5
+				progress: this.hi > this.lo ? Math.min(1, Math.max(0, (this.price - this.lo) / (this.hi - this.lo))) : 0.5,
+				selected: this.selected ? this.describe(this.selected) : null
 			});
 		}
 	}

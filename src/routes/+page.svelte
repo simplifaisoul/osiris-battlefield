@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { replaceState } from '$app/navigation';
-	import { Battlefield, type BattleStats, type RoundEvent, type Scale, type Team } from '$lib/battle/engine';
+	import { Battlefield, type BattleStats, type RoundEvent, type Scale, type Selected, type Team } from '$lib/battle/engine';
+	import { HolderIntel } from '$lib/market/holders';
+	import WarRoom, { type Order } from '$lib/ui/WarRoom.svelte';
 	import { THEATERS } from '$lib/market/theaters';
 	import { OsirisFeed } from '$lib/market/osiris';
 	import { SolFeed } from '$lib/market/sol';
@@ -42,6 +44,19 @@
 	let alert = $state<{ team: Team; line: string; id: number } | null>(null);
 	let flash = $state(0); // bumps on every detonation, restarting the white-out
 	let flashLevel = $state(1);
+
+	// War Room: who each unit is
+	let intel = $state.raw<HolderIntel | null>(null); // not deep-proxied; intelTick signals changes inside it
+	let intelTick = $state(0);
+	let rosterRef: unknown = null;
+	let orders = $state<Order[]>([]);
+	let focus = $state<string | null>(null);
+	let selected = $state<Selected | null>(null);
+	let record = $state<{ soldiers: number; tanks: number; kills: number; deaths: number } | null>(null);
+	let tracked = $state<string | null>(null);
+	let following = $state(false);
+	let roomOpen = $state(innerWidth >= 900);
+	let orderId = 0;
 
 	let prevPrice = 0;
 	let ticks: { t: number; p: number }[] = [];
@@ -116,12 +131,17 @@
 			if (v >= barrageMin) bf?.strike('barrage', attacker, 1);
 			return;
 		}
+		callStrike(tier, attacker, Math.min(tier === 'nuke' ? 1.8 : 2.2, 1 + 0.35 * Math.log2(v / t[tier])), usd(v), what);
+	}
+
+	/** Fly a strike and announce it: a line in the feed, and the alert for a nuke. */
+	function callStrike(tier: keyof typeof STRIKE_NAME, attacker: Team, scale: number, amount: string, what: string) {
 		const side = attacker === 'bull' ? 'Bulls' : 'Bears';
-		bf?.strike(tier, attacker, Math.min(tier === 'nuke' ? 1.8 : 2.2, 1 + 0.35 * Math.log2(v / t[tier])));
+		bf?.strike(tier, attacker, scale);
 		push({
 			tone: attacker,
 			text: `${STRIKE_NAME[tier]} · ${side}`,
-			amount: usd(v),
+			amount,
 			venue: tier === 'nuke' ? 'nuke' : 'strike',
 			title: `${STRIKE_NAME[tier]} flown by the ${side}: ${what}`
 		});
@@ -140,8 +160,15 @@
 			const text = sol
 				? `${e.usd >= t.tank ? 'Whale' : 'Large'} ${e.side}`
 				: `${e.side === 'buy' ? 'Buy' : 'Sell'} · ${shortAddr(e.wallet)}`;
+			if (!sol && e.wallet) intel?.noteTrade(e.wallet, e.side, e.usd, e.ts);
 			if (!e.history) {
-				if (e.usd >= t.squad) bf?.reinforce(team, squadSize(e.usd, t), e.usd >= t.tank);
+				// the squad fights under the trader's name (on SOL, the whale order's)
+				let who = e.wallet;
+				if (sol) {
+					who = `order#${++orderId}`;
+					orders = [{ key: who, side: e.side, usd: e.usd, venue: e.venue, ts: e.ts, front: price }, ...orders].slice(0, 60);
+				}
+				if (e.usd >= t.squad) bf?.reinforce(team, squadSize(e.usd, t), e.usd >= t.tank, who);
 				// every live buy and sell can call in air power, sized by the order
 				strikeFor(e.usd, team, t, Infinity, `${usd(e.usd)} ${e.side} · ${e.venue}`);
 			}
@@ -198,7 +225,33 @@
 		alert = null;
 		stats = null;
 		lastEvent = 'Watching the tape';
+		orders = [];
+		focus = null;
+		selected = null;
+		record = null;
+		tracked = null;
+		following = false;
+		intel?.stop();
+		intel = null;
+		rosterRef = null;
+		intelTick++;
 		bf?.setScale(scaleOf(THEATERS[id]));
+		bf?.track(null);
+		if (id === 'osiris') {
+			const hi: HolderIntel = new HolderIntel(() => {
+				intelTick++;
+				// holders fight for the Bulls, deserters for the Bears, biggest first
+				if (hi.holders !== rosterRef) {
+					rosterRef = hi.holders;
+					bf?.setRoster(
+						hi.holders.map((h) => h.wallet),
+						hi.exited.map((e) => e.wallet)
+					);
+				}
+			});
+			intel = hi;
+			hi.start();
+		}
 		feed = id === 'sol' ? new SolFeed() : new OsirisFeed();
 		sources = feed.sources;
 		source = feed.sources[0].id;
@@ -211,6 +264,40 @@
 		}
 	}
 
+	/** Open a wallet's (or a whale order's) dossier and pick one of its units on the field. */
+	function focusOn(who: string) {
+		focus = who;
+		following = false;
+		if (!who.startsWith('order#')) intel?.request(who, true);
+		selected = bf?.selectWallet(who) ?? null;
+		record = bf?.record(who) ?? null;
+		roomOpen = true;
+	}
+
+	function trackWallet(w: string | null) {
+		tracked = w;
+		const rec = bf?.track(w) ?? null;
+		// a holder with nobody on the field reports for duty so you have something to watch
+		if (w && rec && !rec.soldiers && !rec.tanks && intel?.holderOf(w)) {
+			bf?.reinforce('bull', 3, false, w);
+			bf?.track(w);
+		}
+		if (w) setTimeout(() => focus === w && (selected = bf?.selectWallet(w) ?? selected), 80);
+	}
+
+	function followUnit(on: boolean) {
+		bf?.follow(on);
+		following = on && !!selected?.alive;
+	}
+
+	function closeDossier() {
+		focus = null;
+		selected = null;
+		record = null;
+		following = false;
+		bf?.clearSelection();
+	}
+
 	function toggleSound() {
 		sound = !sound;
 		bf?.setSound(sound);
@@ -220,11 +307,24 @@
 		try {
 			bf = new Battlefield(canvas, {
 				round: onRound,
-				stats: (s) => (stats = s),
+				stats: (s) => {
+					stats = s;
+					if (selected) selected = s.selected;
+					record = focus ? (bf?.record(focus) ?? null) : null;
+				},
 				flash: (k) => {
 					flashLevel = k;
 					flash++;
-				}
+				},
+				select: (s) => {
+					selected = s;
+					following = false;
+					focus = s?.wallet ?? null;
+					if (s?.wallet && !s.wallet.startsWith('order#')) intel?.request(s.wallet, true);
+					if (s) roomOpen = true;
+					record = focus ? (bf?.record(focus) ?? null) : null;
+				},
+				followEnded: () => (following = false)
 			});
 			if (import.meta.env.DEV) (window as any).__bf = bf; // console access while developing
 		} catch (err) {
@@ -236,12 +336,20 @@
 		startTheater(new URLSearchParams(location.search).get('m') === 'sol' ? 'sol' : 'osiris', false);
 		const c = setInterval(() => (clock = utc()), 1000);
 		const flip = setInterval(() => (showTick = !showTick), 5000);
+		// optional local tools in src/lib/dev/: loaded by the dev server only, never part of a build
+		const devOff: (() => void)[] = [];
+		if (import.meta.env.DEV) {
+			const tools = import.meta.glob<{ install(api: { strike: typeof callStrike }): () => void }>('../lib/dev/*.ts');
+			for (const load of Object.values(tools)) load().then((m) => devOff.push(m.install({ strike: callStrike })));
+		}
 		return () => {
+			for (const off of devOff) off();
 			clearInterval(c);
 			clearInterval(flip);
 			clearTimeout(bannerTimer);
 			clearTimeout(alertTimer);
 			feed?.stop();
+			intel?.stop();
 			bf?.dispose();
 		};
 	});
@@ -446,35 +554,55 @@
 		{/if}
 	</section>
 
-	<!-- bottom-right: market feed -->
-	<section class="panel feed" class:closed={!feedOpen} aria-label="Market feed">
-		<header>
-			<div class="label">MARKET FEED</div>
-			<div class="hdr-r">
-				<span class="live"><i></i>LIVE</span>
-				<button class="chev" aria-label={feedOpen ? 'Collapse market feed' : 'Expand market feed'} onclick={() => (feedOpen = !feedOpen)}>
-					{feedOpen ? '▾' : '▴'}
-				</button>
-			</div>
-		</header>
-		{#if feedOpen}
-			<ul>
-				{#each items as it (it.id)}
-					<li class={it.tone} title={it.title}>
-						<span class="venue" style="--vc:{it.badgeTone}">{it.badge}</span>
-						{#if it.href}
-							<a href={it.href} target="_blank" rel="noopener noreferrer">{it.text}</a>
-						{:else}
-							<span class="txt">{it.text}</span>
-						{/if}
-						<span class="amt mono">{it.amount}</span>
-					</li>
-				{:else}
-					<li class="neutral quiet"><span class="txt">Listening to the tape…</span></li>
-				{/each}
-			</ul>
-		{/if}
-	</section>
+	<!-- right column: War Room above the market feed -->
+	<div class="rightcol">
+		<WarRoom
+			{theaterId}
+			{intel}
+			tick={intelTick}
+			{orders}
+			{focus}
+			{selected}
+			{record}
+			{price}
+			fmtFront={(v) => (theaterId === 'osiris' ? usd(v) : theater.price(v))}
+			{tracked}
+			{following}
+			bind:open={roomOpen}
+			onFocus={focusOn}
+			onTrack={trackWallet}
+			onFollow={followUnit}
+			onClose={closeDossier}
+		/>
+		<section class="panel feed" class:closed={!feedOpen} aria-label="Market feed">
+			<header>
+				<div class="label">MARKET FEED</div>
+				<div class="hdr-r">
+					<span class="live"><i></i>LIVE</span>
+					<button class="chev" aria-label={feedOpen ? 'Collapse market feed' : 'Expand market feed'} onclick={() => (feedOpen = !feedOpen)}>
+						{feedOpen ? '▾' : '▴'}
+					</button>
+				</div>
+			</header>
+			{#if feedOpen}
+				<ul>
+					{#each items as it (it.id)}
+						<li class={it.tone} title={it.title}>
+							<span class="venue" style="--vc:{it.badgeTone}">{it.badge}</span>
+							{#if it.href}
+								<a href={it.href} target="_blank" rel="noopener noreferrer">{it.text}</a>
+							{:else}
+								<span class="txt">{it.text}</span>
+							{/if}
+							<span class="amt mono">{it.amount}</span>
+						</li>
+					{:else}
+						<li class="neutral quiet"><span class="txt">Listening to the tape…</span></li>
+					{/each}
+				</ul>
+			{/if}
+		</section>
+	</div>
 
 	{#if stats}
 		<div class="forces mono" aria-label="Forces on the field">
@@ -1057,9 +1185,24 @@
 		padding: 0 4px;
 	}
 
-	.feed {
+	/* right column: the War Room above the market feed */
+	.rightcol {
+		position: absolute;
 		right: 16px;
-		width: 330px;
+		top: 272px;
+		bottom: 16px;
+		width: 340px;
+		display: flex;
+		flex-direction: column;
+		justify-content: flex-end;
+		gap: 10px;
+		pointer-events: none;
+	}
+	.feed {
+		position: relative;
+		bottom: auto;
+		flex: none;
+		pointer-events: auto;
 	}
 	.live {
 		display: inline-flex;
@@ -1083,7 +1226,7 @@
 	}
 	.feed ul {
 		list-style: none;
-		max-height: min(38vh, 300px);
+		max-height: min(24vh, 200px);
 		overflow-y: auto;
 		padding: 0 8px 8px;
 		display: flex;
@@ -1270,13 +1413,14 @@
 		.depth .src {
 			display: none;
 		}
-		.feed {
+		.rightcol {
 			right: 10px;
 			bottom: 10px;
+			top: 300px;
 			width: calc(50% - 15px);
 		}
 		.feed ul {
-			max-height: 24vh;
+			max-height: 18vh;
 		}
 		.banner.new {
 			top: 280px;
